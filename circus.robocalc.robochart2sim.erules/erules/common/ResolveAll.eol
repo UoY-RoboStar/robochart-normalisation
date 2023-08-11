@@ -1,0 +1,24 @@
+	
+var debug = true;
+var emfTool = new Native("org.eclipse.epsilon.emc.emf.tools.EmfTool");
+var ecoreUtil = emfTool.ecoreUtil;
+	
+var models = System.context.getModelRepository().models;
+ 
+for (p in models) {
+	printDebug("Resolving : " + p);
+	//emfTool.ecoreUtil.resolveAll(p.resource.getResourceSet());
+	printDebug("Resourceset: " + p.resource.getResourceSet());
+	var resources = p.resource.getResourceSet().getResources();
+	for (e in resources) {
+	printDebug("Resource: " + e.getURI());
+	//emfTool.ecoreUtil.resolveAll(e);
+	} 
+}
+
+
+operation printDebug(string) {
+	if (debug) {
+		(": "+string).println();
+	}
+}

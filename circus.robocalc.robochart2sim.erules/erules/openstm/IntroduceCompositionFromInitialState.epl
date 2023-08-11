@@ -1,0 +1,65 @@
+
+// Initialization of variables, for example, before transformation.
+pre {
+	// Controls whether debug information is printed.
+	var debug = true;
+	// Mechanism to invoke native Java method that implements copy with deep cloning.
+	var emfTool = new Native("org.eclipse.epsilon.emc.emf.tools.EmfTool");
+	var ecoreUtil = emfTool.ecoreUtil;
+	
+}
+
+// We can define operations.
+operation printDebug(string) {
+	if (debug) {(": "+string).println();}
+}
+
+// The following rule splits a bostm into two: one has just the initial junction and
+// the initial transition (s0 below). The other has all the remaining states and transitions (s). 
+
+pattern IntroduceCompositionFromInitialState 
+	s : OpenSTM!RCBasicOpenStateMachine,
+	initialTransition : OpenSTM!Transition from: s.transitions {
+	match: 	initialTransition.source.isKindOf(OpenSTM!Initial)  and 
+	        s.nodes.exists(n | n = initialTransition.target) // Otherwise the Rule is indefinitely applied
+	do { 
+        //
+		var s0 = new RCBasicOpenStateMachine();
+		// s0.transitions = new Sequence{}; // IS THIS RIGHT, IS IT NECESSARY
+		s0.transitions.add(initialTransition);
+		// s0.nodes = new Sequence{}; // IS THIS RIGHT, IS THIS NECESSARY
+		s0.nodes.add(initialTransition.source);
+		 
+		// Need to set the target node as an entrypoint of the following OSTM?
+		initialTransition.target.entrypoint = true; 
+		 
+		// How to create the RCSeqOpenStateMachine ? Shall it be assigned to s?
+		var s1 = new RCSeqOpenStateMachine();
+		s1.left = s0;
+		s1.right = s;
+		//s.transitions= 
+		//s.nodes = 
+/*		
+		if (debug) {
+		    printDebug("......Left Component........");
+			for (ts in s1.left.transitions) {
+				printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ", trigger: "+ ts.trigger +")");
+			}
+			for (n : EntryPoint in s1.left.nodes) {
+				printDebug("Node = " + n.name + " Entrypoint = " + n.entrypoint + "Node " + n);
+			}
+			printDebug("......Right Component........");
+			if (s1.right.transitions == null) {
+			   printDebug("Is Null"); }
+			else { printDebug("Not Null"); }
+			for (ts in s1.right.transitions) {
+				printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ", trigger: "+ ts.trigger +")");
+			}
+			for (n : EntryPoint in s1.right.nodes) {
+				printDebug("Node = " + n.name + " Entrypoint = " + n.entrypoint + "Node " + n);
+			}
+			
+		}
+*/
+	}
+}

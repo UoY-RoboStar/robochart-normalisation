@@ -1,0 +1,84 @@
+
+// Rule for introducing tStop() and ItStop
+
+// Initialization of variables, for example, before transformation.
+pre {
+	// Controls whether debug information is printed.
+	var debug = true;
+	var emfTool = new Native("org.eclipse.epsilon.emc.emf.tools.EmfTool");
+	var ecoreUtil = emfTool.ecoreUtil;
+	
+	//printDebug("mainPkgRCT " + mainPkgRCT);
+	//printDebug("clonepackagename " + clonepackagename);
+}
+
+// We can define operations.
+operation printDebug(string) {
+	if (debug) {(": "+string).println();}
+}
+
+
+// Rule to introduce tStop into the package, 
+// and a reference to it into all controllers of the model
+pattern Introduce_tStop
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(mainPkgRCT)//mainPkgRCT 
+		//or pkg.name.equals(mainPkgRCT)   
+		{ //clonepackagename
+ 
+	do {
+	   printDebug(" clonepackagename " + clonepackagename);
+	   printDebug(" mainPkgRCT " + mainPkgRCT);
+			
+		// creating operation tStop
+		var tStop 	= new Source!OperationDef();
+		tStop.name = "tStop"; 
+		 
+		// node container of the tStop operation
+		var tStop_I = new Source!Initial();
+		tStop_I.name = "i";
+		var tStop_S = new Source!State();
+		tStop_S.name = "sStop";
+		var tStop_Tr = new Source!Transition();
+		tStop_Tr.name = "t";
+		tStop_Tr.source = tStop_I;
+		tStop_Tr.target = tStop_S;
+		// adding nodes and transition to tStop
+		tStop.nodes.addAll(Set{tStop_I,tStop_S});
+		tStop.transitions.add(tStop_Tr);
+		
+		//Creating the signature for tStop
+		var tStopSig 	= new Source!OperationSig();
+		tStopSig.name 	= tStop.name;  
+		
+		// creating an interface for tStop
+		var ItStop = new Source!Interface();
+		ItStop.name = "I" + tStop.name;
+		ItStop.operations.add(tStopSig);
+		
+		// adding tStop and ItStop to current package.
+		pkg.operations.add(tStop); 
+		pkg.interfaces.add(ItStop); 
+		 
+		 
+		////////////////////////////////////////////////////////////////////////////////////////////////-	
+		// For each ControllerDef (see from clause in the pattern) in the set of all controllers  
+		// introduce references to the created operations 
+		
+	
+		for (ctrl in Source!ControllerDef.all) {
+			var tStopRef 	= new Source!OperationRef();
+			tStopRef.ref 	= tStop;
+			tStopRef.name	= ctrl.name + "_ref_" + tStop.name;
+			ctrl.lOperations.add(tStopRef);
+			printDebug("Adding references to operations in controller '" + ctrl.name + "'");
+		 }	
+		 
+		 			
+			//printDebug("Exit Introduce Deadline Operations");
+
+}
+
+}
+
+ 

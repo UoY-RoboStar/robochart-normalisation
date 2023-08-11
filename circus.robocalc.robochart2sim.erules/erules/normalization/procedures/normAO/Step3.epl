@@ -1,0 +1,131 @@
+
+ 
+// Initialization of variables, for example, before transformation.
+pre {
+	// Controls whether debug information is printed.
+	var debug = true;
+	var emfTool = new Native("org.eclipse.epsilon.emc.emf.tools.EmfTool");
+	var ecoreUtil = emfTool.ecoreUtil;
+}
+
+// We can define operations.
+operation printDebug(string) {
+	if (debug) {(": "+string).println();}
+}
+
+
+// Rule to introduce wait operations (waitOp) into all controllers of the model
+pattern IntroduceWaitOp
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(mainPkgRCT){//clonepackagename) {
+ 
+	do {
+		////////////////////////////////////////////////////////////////////////////////////////////////	
+		// creating operation waitOp
+		var waitOp 	= new Source!OperationDef();
+		waitOp.name = "waitOp";
+		
+		// node container of the waitOp operation
+		var waitOp_I = new Source!Initial();
+		waitOp_I.name = "i0";
+		var waitOp_Waiting = new Source!State();
+		waitOp_Waiting.name = "Waiting";
+		var waitOp_F = new Source!Final();
+		waitOp_F.name = "f";
+		
+		// parameter for the operation waitOp
+		var parD = new Source!Parameter();
+		parD.name = "i";
+		var parDtype = new Source!TypeRef();
+		parDtype.ref = Source!PrimitiveType.all.selectOne(p|p.name="nat");
+		parD.type = parDtype;
+		waitOp.parameters.add(parD);
+		
+		//creating a Clock
+		var clock = new Source!Clock();
+		clock.name = "C";
+		waitOp.clocks.add(clock);
+		//creating a ClockReset
+		var clockReset = new Source!ClockReset();
+		clockReset.clock = clock;
+		
+		//Creating the first transition
+		var waitOp_Tr1 = new Source!Transition();
+		waitOp_Tr1.name = "t";
+		waitOp_Tr1.source = waitOp_I;
+		waitOp_Tr1.target = waitOp_Waiting;
+		waitOp_Tr1.action = clockReset;
+		
+		//condition since(C)=i
+		var equals = new Source!Equals();
+		var clockRef = new Source!ClockExp();
+		clockRef.clock = clock;
+		equals.left = clockRef;
+		
+		var rfD = new Source!RefExp();
+		rfD.ref = parD;
+		equals.right = rfD;
+		
+		//Creating the second transition
+		var waitOp_TrF = new Source!Transition();
+		waitOp_TrF.name = "t2";
+		waitOp_TrF.source = waitOp_Waiting;
+		waitOp_TrF.target = waitOp_F;
+		waitOp_TrF.condition = equals;
+		
+		//creating the nodes for Waiting
+		var waitOp_Waiting_I = new Source!Initial();
+		waitOp_Waiting_I.name = "i";
+		var waitOp_Waiting_SEnd = new Source!State();
+		waitOp_Waiting_SEnd.name = "SEnd";
+		
+		//creating the transition from waitOp_Waiting_I to waitOp_Waiting_SEnd
+		var waitOp_Waiting_Tr = new Source!Transition();
+		waitOp_Waiting_Tr.name = "t";
+		waitOp_Waiting_Tr.source = waitOp_Waiting_I;
+		waitOp_Waiting_Tr.target = waitOp_Waiting_SEnd;
+		
+		//The following steps are not considered for the paper
+		//Adding nodes and transition to waitOp_Waiting
+		waitOp_Waiting.nodes.addAll(Set{waitOp_Waiting_I,waitOp_Waiting_SEnd});
+		waitOp_Waiting.transitions.add(waitOp_Waiting_Tr);
+		
+		// adding nodes and transition to waitOp
+		waitOp.nodes.addAll(Set{waitOp_I,waitOp_Waiting,waitOp_F});
+		waitOp.transitions.addAll(Set{waitOp_Tr1,waitOp_TrF});
+		
+		//Signature for waitOp
+		var waitOpSig 	= new Source!OperationSig();
+		waitOpSig.name 	= waitOp.name; 
+		// parameter for the operation waitOpSig
+		var parDOpSig = new Source!Parameter();
+		parDOpSig.name = "i";
+		var parDOpSigtype = new Source!TypeRef();
+		parDOpSigtype.ref = Source!PrimitiveType.all.selectOne(p|p.name="nat");
+		parDOpSig.type = parDOpSigtype;
+		waitOpSig.parameters.add(parDOpSig);
+		
+		//Creating the interfaces for waitOp
+		var IwaitOp = new Source!Interface();
+		IwaitOp.name = "I" + waitOp.name;
+		IwaitOp.operations.add(waitOpSig);
+		
+		//Adding waitOp and IwaitOp to current package.
+		pkg.operations.add(waitOp); 
+		pkg.interfaces.add(IwaitOp);
+		
+		////////////////////////////////////////////////////////////////////////////////////////////////-	
+		// For each ControllerDef in the set of all controllers  
+		// introduce references to the created operation 
+		for (ctrl in Source!ControllerDef.all) {
+			var waitOpRef 	= new Source!OperationRef();
+			waitOpRef.ref 	= waitOp;
+			waitOpRef.name	= ctrl.name + "_ref_" + waitOp.name;
+			ctrl.lOperations.add(waitOpRef); 
+			//printDebug("Adding references to operations in controller '" + ctrl.name + "'");
+		 }		
+	}	
+		
+}
+
+ 

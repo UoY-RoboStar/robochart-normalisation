@@ -1,0 +1,17 @@
+
+operation printDebug(string) {
+	if (debug) {(": "+string).println();}
+}
+
+operation ignoredPackage(p) {
+	var ignorePackages : Set = Set{"function_toolkit", "sequence_toolkit", "relation_toolkit", "set_toolkit", "core"};
+	
+	return ignorePackages.includes(p.name);
+}
+
+operation fullName(s:RCPackage) {
+	return s.name;
+}
+operation fullName(s:NamedElement) {
+	if (s.eContainer() <> null) { return fullName(s.eContainer()) + "::" + s.name; } else { return s.name; }
+}

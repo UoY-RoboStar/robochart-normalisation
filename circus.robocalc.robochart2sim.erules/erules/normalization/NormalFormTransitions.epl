@@ -1,0 +1,4715 @@
+import "../common/RoboChart.eol";
+
+// Initialization of variables, for example, before transformation.
+pre {
+	// Controls whether debug information is printed.
+	var debug = true;
+	var emfTool = new Native("org.eclipse.epsilon.emc.emf.tools.EmfTool");
+	var ecoreUtil = emfTool.ecoreUtil;
+	
+	var count = 0;
+	var countCRef = 0;
+	var listArgs = new List(Source!Expression);
+
+	var listPar = new List(Source!Parameters);
+	var listParOpSig = new List(Source!Parameters);
+	
+	var first = false;
+	
+	var reqIOps = new Set(Source!Interface);
+	var defEvIOps = new Set(Source!Interface);
+	var defEvIOpsActOp = new Set(Source!Interface);
+    var defEvOps = new Set(Source!Event);
+    var defEvOpsActOp = new Set(Source!Event); 
+    var mapEventsInterface = new Map(Source!Interface,Set(Source!Event));
+}
+
+// We can define operations.
+operation printDebug(string) {
+	if (debug) {(": "+string).println();}
+}
+
+operation replaceUsedVariablesEDFT(i:Source!Interface,e:Source!Expression) {
+	
+	// Compute all objects of the metamodel that are contained by transitivity in a.
+	var expressionContents = e.closure(x|x.eContents());
+	
+	// An Interface is a BasicContext, which can have sequences of VariableList elements,
+	// so we create a new VariableList and add this to the sequence.
+	var variableList = new Source!VariableList();
+	var constantList = new Source!VariableList();
+	
+	variableList.modifier = Source!VariableModifier#VAR;	// Variables
+	constantList.modifier = Source!VariableModifier#CONST; 	// Constants
+	
+	
+	var varrefs = expressionContents.select(y:Source!VarRef|true).collect(z:Source!VarRef|z.name).asSet();
+	var varexps = expressionContents.select(y:Source!RefExp|true).collect(z:Source!RefExp|z.ref).asSet();
+	
+	//ADDED to deal with trigger stop<{ v2 }
+	//////////////////////////////////////-
+	var refexp = new Set(Source!RefExp);
+	
+	if (e.isKindOf(Source!RefExp)){
+	       refexp.add(e.ref);
+	 
+	    }
+	////////////////////////////////////////
+	
+	for (v  in (varrefs+varexps+refexp )){
+	  var newVar = ecoreUtil.copy(v);
+	  printDebug("Copying variable '" + v.name + "'");
+	  
+	  // Add it to the new interface created above, either as a pure variable or constant.
+		if (v.modifier == Source!VariableModifier#VAR){
+			variableList.vars.add(newVar);
+			//printDebug("Source!VariableModifier#VAR");
+			}
+		else{
+			constantList.vars.add(newVar);
+			//printDebug("Source!VariableModifier#CONST");
+			}
+			
+			
+		// Replace all variable references to the old variable declaraiton 'xp.v' => newVar.
+		for (varref in expressionContents.select(x:Source!VarRef|x.name = v)) {
+			varref.name = newVar;
+		}
+		// Update all expression references to the old variable decalration 'xp.v' => newVar.
+		for (refexp in expressionContents.select(x:Source!RefExp|x.ref = v)) {
+			refexp.ref = newVar;
+			//printDebug("refexp in expressionContents '" + refexp.ref + "'");
+		}
+		
+		
+		//ADDED to dead with trigger stop<{ v2 }
+		//////////////////////////////////////-
+		if (refexp.size()==1){
+		    //printDebug("refexp.size()==1");
+		    e.ref = newVar;
+		}
+		//////////////////////////////////////-
+		
+	}
+
+	
+	// In principle, we could add empty lists.. but here we make sure not to do so.
+	if (variableList.vars.size > 0) {
+		i.variableList.add(variableList);
+	} else {
+		delete variableList;
+	}
+	
+	if (constantList.vars.size > 0){
+		i.variableList.add(constantList);
+	} else {
+		delete constantList;
+	}
+}
+
+
+
+//Not required in this epl
+// Complex rule to replace deadline expressions and guards in a state-machine of a controller.
+/*
+pattern Eliminate_deadline_from_trigger_in_StateMachineDef
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	stm : Source!StateMachineDef
+		// For convenience of introducing new elements into the model 
+		// we also pick the containing RCPackage.
+		from: pkg.machines,
+	s 	: Source!State	
+		// One of the states of stm
+		from: stm.closure(x:Source!NodeContainer|x.nodes),
+	t 	: Source!Transition {
+		// One of the transitions with deadline	
+	match: t.source = s and not(t.deadline = null)
+	do {
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		printDebug("Eliminate Deadline From Trigger"); 
+		// Create interfaces to hold new declarations for variables/operations/events used by the deadline and guard expressions
+		var ReqVars 	= new Source!Interface();
+		var ReqOps 		= new Source!Interface();
+		var ReqClocks	= new Source!Interface();
+		
+		ReqVars.name 	= "ReqVars_deadline" + stm.name + "_" + s.name + "_" + t.name;
+		//ReqOps.name 	= "ReqOps_" + stm.name + "_" + s.name + "_" + t.name;
+		//ReqClocks.name 	= "ReqClocks_" + stm.name + "_" + s.name + "_" + t.name;
+							
+		// THIS replacement can be applied direct because end is eliminated from t when
+		// assigned to the deadlineCheck argument
+		replaceUsedVariablesEDFT(ReqVars,t.deadline);
+		printDebug("Redeclared used variables and constants in an new interface '" 
+					+ ReqVars.name 
+					+ "' and replaced references to these variables in a deadline expression.");	
+		
+		var auxCondition = ecoreUtil.copy(t.condition);	
+		printDebug("auxCondition " + auxCondition);		
+		// NEEDS TO COPY and apply the replacement to the copy
+		if (t.condition <> null){
+		   
+			replaceUsedVariablesEDFT(ReqVars,t.condition);
+			printDebug("Redeclared used variables and constants in an new interface '" 
+					+ ReqVars.name 
+					+ "' and replaced references to these variables in a condition.");	
+			//replaceClocks(ReqClocks, t.condition);		
+		 								 
+		}		
+		////////////////////////////////////////////////////////////////////////////////////////////////-		
+		// Create the new operation, and a new signature for inclusion in the interface.
+		var op 		= new Source!OperationDef();
+		var opSig 	= new Source!OperationSig();
+		
+		op.name 	= "normal_" + stm.name + "_" + s.name + "_" + t.name + "_" + "dop";
+		opSig.name 	= "normal_" + stm.name + "_" + s.name + "_" + t.name + "_" + "dop"; 
+		
+		// The operation has an Initial junction and a Final state.
+		var opInitial 	= new Source!Initial();
+		opInitial.name	= "i0";
+		var opStateS0 	= new Source!State();
+		opStateS0.name 	= "S0";
+		
+		// It has a transition from opInitial to opStateS0
+		var transitionT0 = new Source!Transition();
+		transitionT0.source = opInitial;
+		transitionT0.target = opStateS0;
+		transitionT0.name	  = "t0";
+		
+		
+		////////////////////////////////////////////-
+		// State machine of composed state stateS0 //
+		////////////////////////////////////////////-
+		// States
+		var opInitialS0 	= new Source!Initial();
+		opInitialS0.name	= "i0_S0";
+		var opStateS1 	= new Source!State();
+		opStateS1.name 	= "S1";
+		var opStateS2 	= new Source!State();
+		opStateS2.name 	= "S2";
+		
+		// Transition from the initial state to opStateS1
+		var transitionT1 = new Source!Transition();
+		transitionT1.source = opInitialS0;
+		transitionT1.target = opStateS1;
+		transitionT1.name	  = "t0";
+		
+		// Transiftion from opStateS1 to opStateS2
+		var transitionT2 = new Source!Transition();
+		transitionT2.source = opStateS1;
+		transitionT2.target = opStateS2;
+		transitionT2.name	  = "t1";
+		// MAYBE there is no guard originally
+		//transitionT2.condition = ecoreUtil.copy(t.condition);
+		if (not (t.condition == null)) {
+		   transitionT2.condition = t.condition;    // ecoreUtil.copy(t.condition);   
+		} 
+		else {
+		   transitionT2.condition = new Source!BooleanExp();
+		   transitionT2.condition.value = "true";
+		}
+		
+	    // Transition from opStateS2 to opStateS1
+		var transitionT3 = new Source!Transition();
+		transitionT3.source = opStateS2;
+		transitionT3.target = opStateS1;
+		transitionT3.name	  = "t2";
+		transitionT3.condition = new Source!Not();
+		//transitionT3.condition.exp = ecoreUtil.copy(t.condition);
+		transitionT3.condition.exp = ecoreUtil.copy(transitionT2.condition); //new references????
+		
+		// Attributes of stateS2
+		var duringAction = new DuringAction();
+		duringAction.action = new Call();
+		
+		//Added MSCF
+		var interface = pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck");
+		var opSigDeadlineCheck = interface.operations.selectOne(op | op.name = "deadlineCheck");
+		
+		duringAction.action.`operation` = opSigDeadlineCheck;
+		
+		//Adding the parameter
+		duringAction.action.args.add(t.deadline); 
+		//Adding the action
+		opStateS2.actions.add(duringAction);
+		
+		
+		// Removing deadline expression
+		// t.deadline = null; Already removed by the assignment above
+		
+		// Adding during action to opStateS0: either existing during action of s or
+		// a new op call to an operation that behaves like skip 
+			
+		var a = s.actions.selectOne(a | a.isKindOf(DuringAction)); //Added s in actions
+		if (not (a == null)) {
+		    opStateS0.actions.add(a);
+		    
+		   // var op = pkg.controllers.lOperations.select(op : Source!OperationDef)
+		    for ( op : Source!ControllerDef 
+				in select(c:Source!ControllerDef|c.lOperations.exists(s|getOperation(s)==op))) 
+		{
+		    
+		    
+		    printDebug("action " + a.action.`operation`);
+		    for (c in pkg.controllers){
+		    printDebug("c in pkg.controllers" +  c.name);
+		      for (o in c.lOperations){
+		       printDebug("o in c.lOperations " +  o.name);
+		         if (o.isKindOf(Source!OperationDef)){
+		          if (a.action.`operation`.name.equals(o.name)){
+		           printDebug(" o.rInterfaces " + o.rInterfaces);
+		           op.rInterfaces.addAll(o.rInterfaces);  
+		          }
+		            
+		         }
+		         else {
+		         if (a.action.`operation`.name.equals(o.ref.name)){
+		           printDebug(" o.rInterfaces " + o.ref.rInterfaces);
+		           op.rInterfaces.addAll(o.ref.rInterfaces); 
+		          }
+		         }
+		      }
+		      
+		    }
+		    //printDebug("action " + a.action.`operation`.rInterfaces);  
+		  
+		    
+		    
+		   
+		    for (r in stm.rInterfaces){
+		       printDebug("r.name = " + r.name);
+		       for (o in r.operations){
+		           if (o.name.equals(a.action.`operation`.name)){
+		             op.rInterfaces.add(r);
+		             printDebug("interface to be added in op = " + r);
+		          }
+		    }
+		    }
+		    
+		    // Fetching the interface for during op a works only assuming the name
+		    // convention used by Pedro in the rule ReplaceActionsByOperations
+		    // Better to fetch the interface that has the operation to avoid this dependence 
+		    
+		    //Added
+		    //var interface = stm.rInterfaces.selectOne(i | i.operations.selectOne(op | op.name = a.action.`operation`.name));
+		    //printDebug("interface to be added in op = " + interface);
+		    //op.rInterfaces.add(pkg.interfaces.selectOne(i | i.name = "I" + a.`operation`.name));
+		}	
+		}			   
+//		else {
+//			var opStateS1DuringAction = new DuringAction();
+//		   	opStateS1DuringAction.action = new Call();
+//		   	opStateS1DuringAction.action.`operation` = ... selectOne(nameSig = "skipOpSig") ... 
+//		   	opStateS1.action.add(opStateS1DuringAction);
+//		   	op.rInterfaces.add(pkg.interfaces.selectOne(i | i.name = "IskipOp"));
+//		}
+		   	
+		// Adding created operation op as during action of s
+        
+		var sDuringAction = new DuringAction();
+		sDuringAction.action = new Call();
+		sDuringAction.action.`operation` = opSig;
+
+		s.actions.add(sDuringAction); // assuming the original one was removed by the assignment to a above
+		
+		// Add node container to opStateS1
+		//opStateS1.nodes.addAll(Set{opInitialS0,opStateS1,opStateS2});
+		// Add node container to opStateS0
+		opStateS0.nodes.addAll(Set{opInitialS0,opStateS1,opStateS2});
+		opStateS0.transitions.addAll(Set{transitionT1,transitionT2,transitionT3});
+
+        // Add node container to op
+		op.nodes.addAll(Set{opInitial,opStateS0});
+		op.transitions.add(transitionT0);	
+    		
+		// Add OperationDef to current package.
+		pkg.operations.add(op);
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+		
+		// Delete interface for ReqVars if it is empty as the result of the operations
+		// above, otherwise introduce them in the package, and make them required by
+		// the new operation.
+		if (ReqVars.variableList.size() == 0) { delete ReqVars; 	} else { pkg.interfaces.add(ReqVars); op.interfaces.add(ReqVars); }//op.rInterfaces.add(ReqVars)
+		//if (ReqClocks.clocks.size() == 0)     { delete ReqClocks; 	} else { pkg.interfaces.add(ReqClocks); op.rInterfaces.add(ReqClocks); }
+		// Fetch interface (from the package) for the deadlineCheck op
+		// This interface was introduced by a previous rule
+		// Search for this instead of using a fixed name.
+		op.rInterfaces.add(pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck"));
+			
+		printDebug("Added interfaces to package '" + pkg.name + "' and operation '" + op.name + "'");	
+		////////////////////////////////////////////////////////////////////////////////////////////////-	
+		// For each ControllerDef in the set of all controllers 'c' in context (Source!ControllerDef)
+		// for which the 'machines' attribute contains 'stm' or references 'stm', then introduce a
+		// OperationRef element whose 'ref' attribute points to 'op'.
+		for ( c : Source!ControllerDef 
+				in select(c:Source!ControllerDef|c.machines.exists(s|getStateMachine(s)==stm))) 
+		{
+			var opRef 	= new Source!OperationRef();
+			opRef.ref 	= op;
+			opRef.name	= c.name + "_ref_" + op.name;
+			c.lOperations.add(opRef);
+			printDebug("Adding reference to operation in controller '" + c.name + "'");
+		}
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+		// Declare an interface that contains the new operation		
+		var opInterface = new Source!Interface();
+		opInterface.name = "I_" + op.name;
+		opInterface.operations.add(opSig);
+		
+		// Add interface to current package.
+		pkg.interfaces.add(opInterface);
+		
+		// Make this interface required by stm
+		//if (not first){
+		stm.rInterfaces.add(opInterface);
+		//	first = true;
+		//}
+		
+		// Make IdeadlineCheck required by stm.
+		stm.rInterfaces.add(pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck"));
+		
+		t.condition = auxCondition;
+		
+		if (debug)
+		{
+			//printDebug("IntroduceSimpleOperation");
+			//for (ts in op.transitions) {
+				//printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ")");
+			  printDebug("Exit Eliminate Deadline From Trigger");
+			//}
+		}
+	}
+}
+*/
+
+// The following rule breaks a sequence of statements in a Transition's action
+// into actions across a sequence of transitions and states.
+/*
+pattern SeparateTriggerFromAction 
+    pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	stm : Source!StateMachineDef from: pkg.machines,
+	t : Source!Transition from: stm.transitions {
+	match:not ( (not (t.trigger = null) and t.trigger._type = TriggerType#EMPTY) and t.start = null and t.deadline = null and t.condition = null) 
+		and not (t.action = null) 
+		and not (t.trigger = null)
+ 
+	do {
+	    printDebug("Separate Trigger From Action ");
+	    printDebug("t.name " + t.name + " t.action " + t.action);
+		var newJunction = new Source!Junction();
+		newJunction.name = t.name + "_jSTFA"; //_nSTFA
+
+		var newTransition = new Source!Transition();
+		newTransition.name = t.name + "_tSTFA"; //_nSTFA
+		
+		newTransition.source = newJunction;
+		newTransition.target = t.target;
+		newTransition.action = t.action;
+		
+		t.target = newJunction;
+		
+		// Add the new transition and junction to the StateMachineDef.
+		stm.transitions.add(newTransition);
+		stm.nodes.add(newJunction);
+		
+		// No need to remove the action from 't' because an action is contained
+		// in a transition. (MSCF Not sure about that)
+		//MSCF added 28/07
+		// I had to remove. Maybe, because now we are in the context of a RCPackage
+		// If I do not remove, a transition with trigger (and/or condition), 
+		// and an action may lead to an error, because the program will first apply
+		// SeparateTriggerFromAction, and then will try, for instance, to slip action,
+		// but considering the original transition (I have some examples). 
+		// It seems that now newTransition.action = t.action does not remove the condition
+		// from the original transition.
+		t.action = null;
+
+	if (debug) {
+	        
+	        printDebug("Transition '" + t.name + "' from '" + t.source.name +  "' to '" + t.target.name + "' (trigger: " + t.trigger + ")" + "' (action: " + t.action + ")");
+			printDebug("NewTransition '" + newTransition.name + "' from '" + newTransition.source.name +  "' to '" + newTransition.target.name + "' (trigger: " + newTransition.trigger + ")" + "' (action: " + newTransition.action + ")");
+			printDebug("Exit Separate Trigger from Action");
+			//for (ts in stm.transitions) {
+			//	printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ")");
+			//}
+		}
+	}
+}
+*/
+
+/*
+pattern EliminateParStmt 
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	stm : Source!StateMachineDef from: pkg.machines,
+	t: Source!Transition from: stm.transitions
+	{
+	
+	match: not(t.action = null) and	t.action.isTypeOf(Source!ParStmt) 
+	do { 
+	printDebug("EliminateParStmt");
+			
+		t.action = t.action.stmt;
+					
+		if (debug) {
+	        printDebug("EliminateParStmt");	
+	        printDebug("Transition '" + t.name + "' from '" + t.source.name +  "' to '" + t.target.name + "' (action: " + t.action + ", trigger: "+ t.trigger +")");
+		
+			//for (ts in stm.transitions) {
+			//	printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ", trigger: "+ ts.trigger +")");
+			//}
+		}
+	}
+}
+*/
+
+// The following rule breaks a sequence of statements in a Transition's action
+// into actions across a sequence of transitions and states.
+/*
+pattern SplitActions 
+	//s : OpenSTM!RCBasicOpenStateMachine,
+	//t : OpenSTM!Transition in: s.transitions
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	stm : Source!StateMachineDef from: pkg.machines,
+	t: Source!Transition from: stm.transitions
+	{
+	
+	match: 	//not (t.action = null) and t.action.isKindOf(Source!SeqStatement)  //and  t.source = s 
+		// We restrict application of the rule to while the size of the sequence
+		// is greater than zero.
+		t = stm.transitions.selectOne(t1 | not (t1.action = null) and t1.action.isKindOf(Source!SeqStatement))
+	do { 
+	//count=count+1;
+	printDebug("Split action");
+		// A new state is created, and a unique name based on the transition t's
+		// name is given, plus the current size of the sequence. This is just an
+		// example, but in general it may be possible to implement an operation
+		// that walks the model to ensure locally unique names, thus obviating
+		// the need for an explicit decision every time a new element is created.
+		var newJunction = new Source!Junction();
+		printDebug("t.name " + t.name + " t.action " + t.action);
+		printDebug(" t.source " + t.source + " t.target " + t.target);
+		newJunction.name = t.name + "_jSA_" + t.action.statements.size(); //count;//
+		
+		// A new Transition is created, whose source is t.source, and
+		// whose target is the newState. Name uniqueness also ensured
+		// by combining the name of 't' and the size of the sequence.
+		var newTransition = new Source!Transition();
+		newTransition.target = t.target;
+		newTransition.name = t.name + "_tSA_" + t.action.statements.size(); //count;//
+		newTransition.source = newJunction;
+		newTransition.action = t.action;
+		printDebug(" newTransition.action " + newTransition.action);
+		
+		
+		
+		t.action = newTransition.action.statements.removeAt(0);
+		
+		if (newTransition.action.statements.size = 1) {
+			newTransition.action = newTransition.action.statements.first();
+		}
+		
+		t.target = newJunction;
+		
+		stm.transitions.add(newTransition);
+		stm.nodes.add(newJunction);
+		
+		if (debug) {
+	        printDebug("Split action");	
+	        printDebug("Transition '" + t.name + "' from '" + t.source.name +  "' to '" + t.target.name + "' (action: " + t.action + ", trigger: "+ t.trigger +")");
+			printDebug("NewTransition '" + newTransition.name + "' from '" + newTransition.source.name +  "' to '" + newTransition.target.name + "' (action: " + newTransition.action + ", trigger: "+ newTransition.trigger +")");
+			
+			//for (ts in stm.transitions) {
+			//	printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ", trigger: "+ ts.trigger +")");
+			//}
+		}
+	}
+	
+	
+}
+*/
+
+
+
+
+// The following rule breaks a conditional statements in a Transition's action
+// into two transitions for the then part and two for the else part.
+// The first transition of each pair is a guard that checks the boolean condition, leading to a junction.
+// The second transition performs an action (then or else part)
+/*
+pattern SplitConditional 
+    pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	stm : Source!StateMachineDef from: pkg.machines,
+	t: Source!Transition from: stm.transitions
+	{
+	match: 	t.action.isKindOf(Source!IfStmt) and
+	        (t.trigger = null or (not (t.trigger = null) and t.trigger._type = TriggerType#EMPTY)) and 
+	        t.start = null and t.deadline = null and t.condition = null 
+	do { 
+		// Two new junctions are created, and four new transitions are created.  
+		// A unique name based on the transition t's name is adopted.  This is just an
+		// example, but in general it may be possible to implement an operation
+		// that walks the model to ensure locally unique names, thus obviating
+		// the need for an explicit decision every time a new element is created.
+		printDebug("Split conditional");
+		var thenJunction = new Source!Junction();
+		thenJunction.name = t.name + "_thenJ_";
+		var elseJunction = new Source!Junction();
+		elseJunction.name = t.name + "_elseJ_";
+		
+		// Four new Transitions are created, two with source t.source, and
+		// whose target are the thenJunction and elseJunction. Name uniqueness also ensured
+		// by combining the name of 't' with some new strings.
+		var thenTransitionGuard = new Source!Transition();
+		thenTransitionGuard.name = t.name + "_thenTG_";
+		thenTransitionGuard.source = t.source;
+		thenTransitionGuard.target = thenJunction;
+		thenTransitionGuard.condition = ecoreUtil.copy(t.action.expression);
+		// TAKE CARE WITH CONTAINED ATTRIBUTES
+		var thenTransitionAction = new Source!Transition();
+		thenTransitionAction.name = t.name + "_thenTA_";
+		thenTransitionAction.source = thenJunction;
+		thenTransitionAction.target = t.target;
+		thenTransitionAction.action = t.action.then;
+		//
+		var elseTransitionGuard = new Source!Transition();
+		elseTransitionGuard.name = t.name + "_elseTG_";
+		elseTransitionGuard.source = t.source;
+		elseTransitionGuard.target = elseJunction;
+		elseTransitionGuard.condition = new Source!Not(); 
+		elseTransitionGuard.condition.exp = t.action.expression;
+		//
+		var elseTransitionAction = new Source!Transition();
+		elseTransitionAction.name = t.name + "_elseTA_";
+		elseTransitionAction.source = elseJunction;
+		elseTransitionAction.target = t.target;
+		elseTransitionAction.action = t.action.`else`; 
+
+// Missing: add new junctions and transitions, remove t, check containement attributes
+		stm.transitions.addAll(Set{thenTransitionGuard,thenTransitionAction,elseTransitionGuard,elseTransitionAction});
+		stm.transitions.remove(t);
+		delete(t);
+		stm.nodes.addAll(Set{thenJunction,elseJunction});
+		
+		if (debug) {
+		    printDebug("Split conditional");
+		    printDebug("Transition '" + t.name + "' from '" + t.source.name +  "' to '" + t.target.name + "' (action: " + t.action + ", trigger: "+ t.trigger +")");
+		
+			//for (ts in stm.transitions) {
+			//	printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ", trigger: "+ ts.trigger +")");
+			//}
+		}
+	}
+}
+*/
+
+// New version - 16/11
+// Complex rule to eliminate deadline expressions in a state-machine
+/* 
+pattern EliminateDeadlineFromActionInStateMachine
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	stm : Source!StateMachineDef
+		from: pkg.machines,	      
+	t 	: Source!Transition from: stm.transitions 
+	{
+		// One of the transitions with deadline	
+	match: t = stm.transitions.selectOne(t1 | not(t1.action = null) and t1.action.isKindOf(Source!TimedStatement))
+
+	do {
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		count=count+1;
+		printDebug("Eliminate Deadline From Action In StateMachine - New version"); 
+		
+		printDebug("transition.name " + t.name + " stm.name " + stm.name + " t.action "  + t.action);
+		
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		// Create a interfaces to hold new declarations for variables/operations/events used by this action.
+		var ReqVars 	= new Source!Interface();
+		var ReqOps 		= new Source!Interface();
+		var ReqEvents	= new Source!Interface();
+		var ReqClocks	= new Source!Interface();
+		
+		
+		ReqVars.name 	= "ReqVars_" + stm.name + "_" +  t.source.name + "_" + t.name;
+		ReqOps.name 	= "ReqOps_" + stm.name + "_" +  t.source.name + "_" + t.name;
+		ReqEvents.name 	= "ReqEvents_" + stm.name + "_" +  t.source.name + "_" + t.name;
+		ReqClocks.name 	= "ReqClocks_" + stm.name + "_" +  t.source.name + "_" + t.name;
+		//ReqClocks.name 	= "ReqClocks_" 	+ stm.name + "_" + t.name;
+		
+		replaceUsedVariables(ReqVars,t.action.stmt);
+		printDebug("Redeclared used variables and constants in an new interface '" 
+					+ ReqVars.name 
+					+ "' and replaced references to these variables in an action.");		
+		
+		replaceUsedEvents(ReqEvents,t.action.stmt);
+		printDebug("Redeclared used events in an new interface '" 
+					+ ReqEvents.name 
+					+ "' and replaced references to these variables in an action.");
+		
+		replaceUsedOps(ReqOps, t.action.stmt);
+		printDebug("Redeclared used operations in an new interface '" 
+					+ ReqOps.name 
+					+ "' and replaced references to these variables in an action.");
+			
+		replaceClocks(ReqClocks, t.action.stmt);					
+		//////////////////////////////////////////////////////////////////////////-			
+		
+		// Create the new operation, and a new signature for inclusion in the interface.
+		var op 		= new Source!OperationDef();
+		var opSig 	= new Source!OperationSig();
+		
+		op.name 	= "normal" + "_" + stm.name + "_" +  t.source.name + "_" + t.name + "_" + "op";
+		opSig.name 	= "normal" + "_" + stm.name + "_" +  t.source.name + "_" + t.name + "_" + "op";
+		//op.name 	= "deadlineInAction" + "_" + t.name + "_" + stm.name;
+		//opSig.name 	= "deadlineInAction" + "_" + t.name + "_" + stm.name; 
+		
+		// parameter for the deadlineInAction operationSig - opSig
+		var parD2 = new Source!Parameter();
+		var parDtype2 = new Source!TypeRef();
+		parDtype2.ref = Source!PrimitiveType.all.selectOne(p|p.name="int");
+		parD2.type = parDtype2;
+		parD2.name = "d";
+		opSig.parameters.add(parD2);
+		
+        // parameter for the deadlineInAction operationDef - op
+		var parD = new Source!Parameter();
+		var parDtype = new Source!TypeRef();
+		parDtype.ref = Source!PrimitiveType.all.selectOne(p|p.name="int");
+		parD.type = parDtype;
+		parD.name = "d";
+		op.parameters.add(parD);
+		
+		// The operation has an initial junction, a composite state, and a final state.
+		var opInitial 	= new Source!Initial();
+		opInitial.name	= "i"; // + "_" + (count+1);
+		var opStateS0 	= new Source!State();
+		opStateS0.name 	= "S0";
+		var opFinal 	= new Source!Final();
+		opFinal.name 	= "f"; //+ "_" + (count+1);
+		
+		//Creating the variable g for the new operation
+		var newVar = new Source!Variable();
+		newVar.name = "g_EDFA" + t.name; //+ newState.name;
+		
+		var newVartype = new Source!TypeRef();
+		newVartype.ref = Source!PrimitiveType.all.selectOne(p|p.name="boolean");
+		newVar.type = newVartype;
+        //printDebug("newVar " + newVar);
+		var initialVar = new Source!BooleanExp();
+		initialVar.value = "false";
+		
+		newVar.initial = initialVar;
+
+        // Attributes of op
+		// 1 - Adding the variable g to op
+		var variableList = new Source!VariableList();
+		variableList.vars.add(newVar);
+		variableList.modifier = VariableModifier#VAR;
+		op.variableList.add(variableList); 
+		
+		// 2 - op requires IdeadlineCheck
+		var interface = pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck");
+		// Adding the IdeadlineCheck to op
+		op.rInterfaces.add(interface);
+		
+		// Attributes of the composite state opStateS0
+		var opInitialS0 	= new Source!Initial();
+		opInitialS0.name	= "i";//+ "_" + (count+1);
+		var opStateS1 	= new Source!State();
+		opStateS1.name 	= "S1";
+		var opFinalS0 	= new Source!Final();
+		opFinalS0.name 	= "f";//+ "_" + (count+1);
+		
+		//Creating the during action (during deadlineCheck) for opStateS0
+		var duringAction = new DuringAction();
+		duringAction.action = new Call();
+		
+		var opSigDeadlineCheck = interface.operations.selectOne(op | op.name = "deadlineCheck");
+		
+		duringAction.action.`operation` = opSigDeadlineCheck;
+		//Adding the parameter
+		var par = t.action.deadline;
+		//printDebug("par " + par);
+		
+		var rfD = new Source!RefExp();
+		rfD.ref = parD;
+		duringAction.action.args.add(rfD); 
+		//printDebug("duringAction.action.args " + duringAction.action.args);
+		
+		//Adding the action to opStateS1
+		//opStateS1.actions.add(duringAction); //No, it is in opStateS0
+		opStateS0.actions.add(duringAction);
+		
+		//Creating the transitions of opStateS0
+		//It has two transitions: from opInitialS0 to opStateS1
+		var t0S0 = new Source!Transition();
+		t0S0.source = opInitialS0;
+		t0S0.target = opStateS1;
+		t0S0.name	  = "t0";
+		
+		//Creating the action of the transition t1S0
+		var seqStatement = new Source!SeqStatement();
+		var actionSeq1 =  t.action.stmt;
+		
+		//Craeting VarRef g=true
+		var varRef = new Source!VarRef();
+	    varRef.name = newVar;
+		var trueVar = new Source!BooleanExp();
+		trueVar.value = "true";
+		//Setting the second action of the SeqStatement
+		var actionSeq2 = new Source!Assignment();
+		actionSeq2.left = varRef;
+		actionSeq2.right = trueVar;
+		
+		seqStatement.statements.addAll(Sequence{actionSeq1,actionSeq2});
+
+        // It also has a transition from opStateS1 to opfinalS0
+		var t1S0 = new Source!Transition();
+		t1S0.name	= "t1";
+		t1S0.source = opStateS1;
+		t1S0.target = opFinalS0;
+		t1S0.action = seqStatement;
+
+		//Adding the nodes and transition of opStateS0
+		opStateS0.nodes.addAll(Set{opInitialS0,opStateS1,opFinalS0});
+		opStateS0.transitions.addAll(Set{t0S0,t1S0});
+		
+		// Op has two transitions
+		// (1) - from opInitial to opStateS0
+		var t0 = new Source!Transition();
+		t0.source = opInitial;
+		t0.target = opStateS0;
+		t0.name	  = "t0EDFA";
+		
+		// (2) - from opStateS0 to opfinal
+		var t1 = new Source!Transition();
+		t1.source = opStateS0;
+		t1.target = opFinal;
+		t1.name	  = "t1EDFA";
+		
+		//Creating RefExp [g]
+		var refExp = new Source!RefExp();
+		refExp.ref = newVar;
+		t1.condition = refExp;
+		//printDebug(" t1.condition " + t1.condition);
+		
+		//Adding nodes and transition of op
+		op.nodes.addAll(Set{opInitial,opStateS0,opFinal});
+		op.transitions.addAll(Set{t0,t1});
+		
+		//Creating the call to deadlineInAction
+		var call = new Source!Call();
+		call.`operation` = opSig;
+		call.args.add(par);
+		t.action = call;
+		printDebug(" t.action " + t.action);
+		
+		////////////////////////////////////////////////////////////////////////////////////////////////-	
+		// For each ControllerDef in the set of all controllers 'c' in context (Source!ControllerDef)
+		// for which the 'machines' attribute contains 'stm' or references 'stm', then introduce a
+		// OperationRef element whose 'ref' attribute points to 'op'.
+		for ( c : Source!ControllerDef in pkg.controllers) 
+		{
+			var opRef 	= new Source!OperationRef();
+			opRef.ref 	= op;
+			opRef.name	= c.name + "_ref_" + op.name;
+			c.lOperations.add(opRef);
+			printDebug("Adding reference to operation in controller '" + c.name + "'");
+		}
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+					
+		//t.action = null; //problem here
+		
+		// Add OperationDef to current package.
+		pkg.operations.add(op);
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+		
+		// Delete interfaces if they are empty as the result of the operations
+		// above, otherwise introduce them in the package, and make them required by
+		// the new operation.
+		if (ReqOps.operations.size == 0) 	{ delete ReqOps; 	} else { pkg.interfaces.add(ReqOps); op.rInterfaces.add(ReqOps); }
+		if (ReqEvents.events.size == 0)		{ delete ReqEvents;	} else { pkg.interfaces.add(ReqEvents); op.interfaces.add(ReqEvents); }
+		if (ReqVars.variableList.size == 0) { delete ReqVars; 	} else { pkg.interfaces.add(ReqVars); op.rInterfaces.add(ReqVars); }
+		if (ReqClocks.clocks.size == 0)     { delete ReqClocks; } else { pkg.interfaces.add(ReqClocks); op.rInterfaces.add(ReqClocks); }
+		printDebug("ReqClocks.clocks.size() " + ReqClocks.clocks.size);	
+				
+		printDebug("Added interfaces to package '" + pkg.name + "' and operation '" + op.name + "'");	
+			
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+		// Declare an interface that contains the new operation		
+		var opInterface = new Source!Interface();
+		opInterface.name = "I_" + op.name;
+		opInterface.operations.add(opSig);
+		
+		// Add interface to current package.
+		pkg.interfaces.add(opInterface);
+		
+		// Make this interface required by stm.
+		stm.rInterfaces.add(opInterface);
+		
+		// Make IdeadlineCheck required by stm.
+		stm.rInterfaces.add(pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck"));
+		//MSCF - the state machine (or operation) that calls the current operation 
+		//must requires the current operation and IdeadlineCheck
+		//stm.rInterfaces.add(pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck"));
+		//searchMachine(pkg,opDef,opInterface);
+		//searchOperation(opDef,opInterface);
+		
+		// Adding OperationDef to current package.
+		pkg.operations.add(op);
+		
+		
+		if (debug)
+		{
+			//printDebug("IntroduceSimpleOperation");
+			//for (ts in op.transitions) {
+				//printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ")");
+			  printDebug("new operation " + op.name);
+			  printDebug("Exit Eliminate Deadline From Action In StateMachine");
+			  
+			//}
+		}
+	}
+	
+}
+*/
+
+
+/*
+pattern RemoveNondeterministicWaitBase 
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	stm : Source!StateMachineDef from: pkg.machines,
+	t: Source!Transition from: stm.transitions {
+	match: 	t.action.isKindOf(Source!Wait) and t.action.duration.isKindOf(Source!RangeExp) and
+	        t.action.duration.lrange.isKindOf(Source!IntegerExp) and 
+	        t.action.duration.rrange.isKindOf(Source!IntegerExp) and
+	        t.action.duration.lrange.value = t.action.duration.rrange.value and
+	        // We restrict application of this rule to nondeterminist wait with the 
+	        // range defined by constants with the same value
+	        // Additionaly, we impose that there is only the wait action and no other element in
+	        // the transition
+	        (t.trigger = null or (not (t.trigger = null) and t.trigger._type = TriggerType#EMPTY)) and 
+	        t.start = null and t.deadline = null and t.condition = null 
+	do { 
+		// Only the action is modified: a nondeterministic wait is replaced with an ordinary one
+		
+		t.action.duration = t.action.duration.lrange;
+		
+		if (debug) {
+		    printDebug("Remove wait - base");
+		    printDebug("Transition '" + t.name + "' from '" + t.source.name +  "' to '" + t.target.name + "' (action: " + t.action + ", trigger: "+ t.trigger +")");
+		
+			//for (ts in s.transitions) {
+			//	printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ", trigger: "+ ts.trigger +")");
+			//}
+		}
+	}
+}
+*/
+
+/*
+pattern RemoveNondeterministicWaitInduction 
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	stm : Source!StateMachineDef from: pkg.machines,
+	t: Source!Transition from: stm.transitions{
+	match: 	t.action.isKindOf(Source!Wait) and t.action.duration.isKindOf(Source!RangeExp) and
+	        t.action.duration.lrange.isKindOf(Source!IntegerExp) and 
+	        t.action.duration.rrange.isKindOf(Source!IntegerExp) and
+	        t.action.duration.lrange.value < t.action.duration.rrange.value and
+	        // We restrict application of this rule to nondeterminist wait with the range
+	        // defined by constants such that the lrange value is strictly less than the rrange value
+	        // Additionaly, we impose that there is only the wait action and no other element in
+	        // the transition
+	        (t.trigger = null or (not (t.trigger = null) and t.trigger._type = TriggerType#EMPTY)) and 
+	        t.start = null and t.deadline = null and t.condition = null 
+	do { 
+		// The original action is preserved (but the action wait([l,r]) is replaced with wait([l+1,r])
+		// and a new transition (with the same source and target) is created with action wait(l)
+		
+		var waitTransition = new Source!Transition();
+		waitTransition.name = t.name + "_wait_"+ count++;
+		waitTransition.source = t.source;
+		waitTransition.target = t.target;
+		waitTransition.action = new Wait(); 
+		waitTransition.action.duration = ecoreUtil.copy(t.action.duration.lrange);
+		
+		t.action.duration.lrange.value = t.action.duration.lrange.value + 1;
+		
+		stm.transitions.add(waitTransition);
+		
+		if (debug) {
+		    printDebug("Remove wait - induction"); 
+		    printDebug("Transition '" + t.name + "' from '" + t.source.name +  "' to '" + t.target.name + "' (action: " + t.action + ", trigger: "+ t.trigger +")");
+		
+			//for (ts in s.transitions) {
+			//	printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ", trigger: "+ ts.trigger +")");
+			//}
+		}
+	}
+}
+*/
+
+// The following rule introduces a junction before an initial transition that contains an action.
+/*
+pattern IntroduceJunctionBeforeInitialTransition 
+    pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	stm : Source!StateMachineDef from: pkg.machines,
+	t: Source!Transition from: stm.transitions
+	 {
+	match: 	t.source.isKindOf(Source!Initial) and not(t.action = null) and
+	        stm.nodes.exists(n | n = t.target  ) 
+
+	do { 
+	   printDebug("Introduce Junction Before Initial Transition");	
+		// A new junction is created, and a unique name based on the transition t's
+		// name is given
+		var newJunction = new Source!Junction();
+		newJunction.name = t.name + "_j_" + "empty";
+		
+		// A new Transition is created, whose source is t.source, and
+		// whose target is the newJunction. Name uniqueness also ensured
+		// by combining the name of 't' (t).
+		var newTransition = new Source!Transition();
+		newTransition.source = t.source;
+		newTransition.target = newJunction;
+		newTransition.name =  t.name + "_t_" + "empty";
+		
+		t.source = newJunction;
+		
+ 		stm.transitions.add(newTransition);
+		stm.nodes.add(newJunction);
+		
+		if (debug) {
+	        printDebug("Introduce Junction Before Initial Transition");	
+	        printDebug("Transition '" + t.name + "' from '" + t.source.name +  "' to '" + t.target.name + "' (action: " + t.action + ", trigger: "+ t.trigger +")");
+		
+			//for (ts in s.transitions) {
+			//	printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ", trigger: "+ ts.trigger +")");
+			//}
+		}
+	}
+}
+*/
+//////////////////////////////////////////////////////////////////////////////-
+//////////////////////////////////////////////////////////////////////////////-
+//-Rules to be applied in a Composite State of a RoboChart machine
+//////////////////////////////////////////////////////////////////////////////-
+//////////////////////////////////////////////////////////////////////////////-
+/*
+pattern SplitActionsInCompositeState  
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	stm : Source!StateMachineDef from: pkg.machines,
+	s 	: Source!State	
+		// One of the states of stm
+		from: stm.closure(x:Source!NodeContainer|x.nodes),		      
+	t 	: Source!Transition from: s.transitions
+	{
+	
+	match: 	s.nodes.size() > 0  
+	        //and s.transitions.exists(t1 | not(t1.action = null) and t.action.isKindOf(Source!IfStmt))
+	         and t = s.transitions.selectOne(t1 | not(t1.action = null) and t1.action.isKindOf(Source!SeqStatement) )
+	         
+		// We restrict application of the rule to while the size of the sequence
+		// is greater than zero.
+	do { 
+	    printDebug("Split Action In Composite State of a RoboChart machine");
+		// A new state is created, and a unique name based on the transition t's
+		// name is given, plus the current size of the sequence. This is just an
+		// example, but in general it may be possible to implement an operation
+		// that walks the model to ensure locally unique names, thus obviating
+		// the need for an explicit decision every time a new element is created.
+		var newJunction = new Source!Junction();
+		newJunction.name = t.name + "_j_" + t.action.statements.size();
+		
+		// A new Transition is created, whose source is t.source, and
+		// whose target is the newState. Name uniqueness also ensured
+		// by combining the name of 't' and the size of the sequence.
+		var newTransition = new Source!Transition();
+		newTransition.target = t.target;
+		newTransition.name = t.name + "_t_" + t.action.statements.size();
+		newTransition.source = newJunction;
+		newTransition.action = t.action;
+		
+		t.action = newTransition.action.statements.removeAt(0);
+		
+		if (newTransition.action.statements.size = 1) {
+			newTransition.action = newTransition.action.statements.first();
+		}
+		
+		t.target = newJunction;
+		
+		s.transitions.add(newTransition);
+		s.nodes.add(newJunction);
+		
+		if (debug) {	
+	        printDebug("Transition '" + t.name + "' from '" + t.source.name +  "' to '" + t.target.name + "' (action: " + t.action + ", trigger: "+ t.trigger +")");
+			printDebug("Exit Split Action In Composite State of a RoboChart machine");
+			//for (ts in stm.transitions) {
+			//	printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ", trigger: "+ ts.trigger +")");
+			//}
+		}
+	}
+}
+*/
+
+// The following rule breaks a conditional statements in a Transition's action
+// into two transitions for the then part and two for the else part.
+// The first transition of each pair is a guard that checks the boolean condition, leading to a junction.
+// The second transition performs an action (then or else part)
+/*
+pattern SplitConditionalInCompositeState 
+    pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	stm : Source!StateMachineDef from: pkg.machines,
+	s 	: Source!State	
+		// One of the states of stm
+		from: stm.closure(x:Source!NodeContainer|x.nodes),		      
+	t 	: Source!Transition from: s.transitions
+	{
+	match: 	s.nodes.size() > 0  
+	        and t = s.transitions.selectOne(t1 | not(t1.action = null) and t.action.isKindOf(Source!IfStmt) )
+	do { 
+		// Two new junctions are created, and four new transitions are created.  
+		// A unique name based on the transition t's name is adopted.  This is just an
+		// example, but in general it may be possible to implement an operation
+		// that walks the model to ensure locally unique names, thus obviating
+		// the need for an explicit decision every time a new element is created.
+		printDebug("Split conditional In Composite State of a RoboChart machine");
+		   
+		var thenJunction = new Source!Junction();
+		thenJunction.name = t.name + "_thenJ_";
+		var elseJunction = new Source!Junction();
+		elseJunction.name = t.name + "_elseJ_";
+		
+		// Four new Transitions are created, two with source t.source, and
+		// whose target are the thenJunction and elseJunction. Name uniqueness also ensured
+		// by combining the name of 't' with some new strings.
+		var thenTransitionGuard = new Source!Transition();
+		thenTransitionGuard.name = t.name + "_thenTG_";
+		thenTransitionGuard.source = t.source;
+		thenTransitionGuard.target = thenJunction;
+		thenTransitionGuard.condition = ecoreUtil.copy(t.action.expression);
+		// TAKE CARE WITH CONTAINED ATTRIBUTES
+		var thenTransitionAction = new Source!Transition();
+		thenTransitionAction.name = t.name + "_thenTA_";
+		thenTransitionAction.source = thenJunction;
+		thenTransitionAction.target = t.target;
+		thenTransitionAction.action = t.action.then;
+		//
+		var elseTransitionGuard = new Source!Transition();
+		elseTransitionGuard.name = t.name + "_elseTG_";
+		elseTransitionGuard.source = t.source;
+		elseTransitionGuard.target = elseJunction;
+		elseTransitionGuard.condition = new Not(); // or new new OpenSTM!Not() ???
+		elseTransitionGuard.condition.exp = t.action.expression;
+		//
+		var elseTransitionAction = new Source!Transition();
+		elseTransitionAction.name = t.name + "_elseTA_";
+		elseTransitionAction.source = elseJunction;
+		elseTransitionAction.target = t.target;
+		elseTransitionAction.action = t.action.`else`; 
+
+// Missing: add new junctions and transitions, remove t, check containement attributes
+		s.transitions.addAll(Set{thenTransitionGuard,thenTransitionAction,elseTransitionGuard,elseTransitionAction});
+		s.transitions.remove(t);
+		delete(t);
+		s.nodes.addAll(Set{thenJunction,elseJunction});
+		
+		if (debug) {
+		    printDebug("Transition '" + t.name + "' from '" + t.source.name +  "' to '" + t.target.name + "' (action: " + t.action + ", trigger: "+ t.trigger +")");
+		    printDebug("Exit Split conditional In Composite State of a RoboChart machine");
+		   
+			//for (ts in stm.transitions) {
+			//	printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ", trigger: "+ ts.trigger +")");
+			//}
+		}
+	}
+}
+*/
+
+/*
+// Complex rule to eliminate deadline expressions in a composite state of a state-machine of a controller.
+pattern EliminateDeadlineFromActionInCompositeState
+	 pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	stm : Source!StateMachineDef from: pkg.machines,
+	s 	: Source!State	
+		// One of the states of stm
+		from: stm.closure(x:Source!NodeContainer|x.nodes),		      
+	t 	: Source!Transition from: s.transitions//, par: Source!ParStmt
+	{
+	
+	match: s.nodes.size() > 0 
+	       and t = s.transitions.selectOne(t1 | not(t1.action = null) and t1.action.isKindOf(Source!TimedStatement))	
+	do {
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		
+		printDebug("Eliminate Deadline From Action In Composite State of a RoboChart machine"); 
+		printDebug("t.name " + t.name + "stm.name " + stm.name + "t.action"  + t.action);
+		
+		
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		// Create a interfaces to hold new declarations for variables/operations/events used by this action.
+		var ReqVars 	= new Source!Interface();
+		var ReqOps 		= new Source!Interface();
+		var ReqEvents	= new Source!Interface();
+		var ReqClocks	= new Source!Interface();
+		
+		
+		ReqVars.name 	= "ReqVars_" + stm.name + "_" +  t.source.name + "_" + t.name;
+		ReqOps.name 	= "ReqOps_" + stm.name + "_" +  t.source.name + "_" + t.name;
+		ReqEvents.name 	= "DefEvents_" + stm.name + "_" +  t.source.name + "_" + t.name;
+		ReqClocks.name 	= "ReqClocks_" + stm.name + "_" +  t.source.name + "_" + t.name;
+		
+		//ReqClocks.name 	= "ReqClocks_" 	+ stm.name + "_" + t.name;
+		
+		replaceUsedVariables(ReqVars,t.action.stmt);
+		printDebug("Redeclared used variables and constants in an new interface '" 
+					+ ReqVars.name 
+					+ "' and replaced references to these variables in an action.");		
+		
+		replaceUsedEvents(ReqEvents,t.action.stmt);
+		printDebug("Redeclared used events in an new interface '" 
+					+ ReqEvents.name 
+					+ "' and replaced references to these variables in an action.");
+		
+		replaceUsedOps(ReqOps, t.action.stmt);
+		printDebug("Redeclared used operations in an new interface '" 
+					+ ReqOps.name 
+					+ "' and replaced references to these variables in an action.");
+			
+		replaceClocks(ReqClocks, t.action.stmt);	
+		
+		
+		// Create the new operation, and a new signature for inclusion in the interface.
+		var op 		= new Source!OperationDef();
+		var opSig 	= new Source!OperationSig();
+		
+		op.name 	= "normal" + "_" + stm.name + "_" +  t.source.name + "_" + t.name + "_" + "op";
+		opSig.name 	= "normal" + "_" + stm.name + "_" +  t.source.name + "_" + t.name + "_" + "op";
+		//op.name 	= "deadlineInAction" + "_" + t.name + "_";
+		//opSig.name 	= "deadlineInAction" + "_" + t.name + "_"; 
+		
+		// parameter for the deadlineInAction operationDef
+		var parD = new Source!Parameter();
+		var parDtype = new Source!TypeRef();
+		parDtype.ref = Source!PrimitiveType.all.selectOne(p|p.name="int");
+		parD.type = parDtype;
+		parD.name = "d";
+		op.parameters.add(parD);
+		
+		// The operation has an Initial junction, a composite state, and a final state.
+		var opInitial 	= new Source!Initial();
+		opInitial.name	= "i";
+		var opStateS0 	= new Source!State();
+		opStateS0.name 	= "S0";
+		var opFinal 	= new Source!Final();
+		opFinal.name 	= "f";
+		
+		//Creating the variable g for the new operation
+		var newVar = new Source!Variable();
+		newVar.name = "g_EDFA" + t.name; //+ newState.name;
+		
+		var newVartype = new Source!TypeRef();
+		newVartype.ref = Source!PrimitiveType.all.selectOne(p|p.name="boolean");
+		newVar.type = newVartype;
+        //printDebug("newVar " + newVar);
+		var initialVar = new Source!BooleanExp();
+		initialVar.value = "false";
+		
+		newVar.initial = initialVar;
+
+        // Attributes of op
+		// 1 - Adding the variable g to op
+		var variableList = new Source!VariableList();
+		variableList.vars.add(newVar);
+		variableList.modifier = VariableModifier#VAR;
+		op.variableList.add(variableList); 
+		
+		// 2 - op requires IdeadlineCheck
+		var interface = pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck");
+		// Adding the IdeadlineCheck to op
+		op.rInterfaces.add(interface);
+		
+		// Attributes of the composite state opStateS0
+		var opInitialS0 	= new Source!Initial();
+		opInitialS0.name	= "i";
+		var opStateS1 	= new Source!State();
+		opStateS1.name 	= "S1";
+		var opFinalS0 	= new Source!Final();
+		opFinalS0.name 	= "f";
+		
+		//Creating the during action (during deadlineCheck) for opStateS1
+		var duringAction = new DuringAction();
+		duringAction.action = new Call();
+		
+		var opSigDeadlineCheck = interface.operations.selectOne(op | op.name = "deadlineCheck");
+		
+		duringAction.action.`operation` = opSigDeadlineCheck;
+		//Adding the parameter
+		var par = t.action.deadline;
+		//printDebug("par " + par);
+		
+		var rfD = new Source!RefExp();
+		rfD.ref = parD;
+		duringAction.action.args.add(rfD); 
+		printDebug("duringAction.action.args " + duringAction.action.args);
+		
+		//Adding the action to opStateS0
+		opStateS0.actions.add(duringAction);
+		
+		//Creating the transitions of opStateS1
+		//It has two transitions: from opInitialS0 to opStateS1
+		var t0S0 = new Source!Transition();
+		t0S0.source = opInitialS0;
+		t0S0.target = opStateS1;
+		t0S0.name	  = "t0";
+		
+		// It also has a transition from opStateS1 to opfinalS0
+		var t1S0 = new Source!Transition();
+		t1S0.source = opStateS1;
+		t1S0.target = opFinalS0;
+		t1S0.name	= "t1";
+		
+		//Creating the action of the transition t1S1
+		var seqStatement = new Source!SeqStatement();
+		//Setting the second action of the SeqStatement
+		var actionSeq1 = t.action.stmt;
+		//Craeting VarRef g=true
+		var varRef = new Source!VarRef();
+	    varRef.name = newVar;
+		var trueVar = new Source!BooleanExp();
+		trueVar.value = "true";
+		//Setting the second action of the SeqStatement
+		var actionSeq2 = new Source!Assignment();
+		actionSeq2.left = varRef;
+		actionSeq2.right = trueVar;
+		
+		seqStatement.statements.addAll(Sequence{actionSeq1,actionSeq2});
+		t1S0.action = seqStatement;
+		//Adding the nodes and transition of opStateS0
+		opStateS0.nodes.addAll(Set{opInitialS0,opStateS1,opFinalS0});
+		opStateS0.transitions.addAll(Set{t0S0,t1S0});
+	
+		// Op has two transitions
+		// from opInitial to opStateS0
+		var t0 = new Source!Transition();
+		t0.source = opInitial;
+		t0.target = opStateS0;
+		t0.name	  = "t0";
+		
+		// It also has a transition from opStateS0 to opfinal
+		var t1 = new Source!Transition();
+		t1.source = opStateS0;
+		t1.target = opFinal;
+		t1.name	  = "t1";
+		//Creating RefExp [g]
+		var refExp = new Source!RefExp();
+		refExp.ref = newVar;
+		t1.condition = refExp;
+		printDebug(" t1.condition " + t1.condition);
+		//Adding nodes and transition of op
+		op.nodes.addAll(Set{opInitial,opStateS0,opFinal});
+		op.transitions.addAll(Set{t0,t1});
+		
+		//Creating the call to deadlineInAction
+		var call = new Source!Call();
+		call.`operation` = opSig;
+		call.args.add(par);
+		t.action = call;
+		printDebug(" t.action " + t.action);
+		
+		////////////////////////////////////////////////////////////////////////////////////////////////-	
+		// For each ControllerDef in the set of all controllers 'c' in context (Source!ControllerDef)
+		// for which the 'machines' attribute contains 'stm' or references 'stm', then introduce a
+		// OperationRef element whose 'ref' attribute points to 'op'.
+		for ( c : Source!ControllerDef 
+				in select(c:Source!ControllerDef|c.machines.exists(s|getStateMachine(s)==stm))) 
+		{
+			var opRef 	= new Source!OperationRef();
+			opRef.ref 	= op;
+			opRef.name	= c.name + "_ref_" + op.name;
+			c.lOperations.add(opRef);
+			printDebug("Adding reference to operation in controller '" + c.name + "'");
+		}
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+		// Declare an interface that contains the new operation		
+		var opInterface = new Source!Interface();
+		opInterface.name = "I_" + op.name;
+		
+		// parameter for the deadlineInAction_ operation sig
+		var parD2 = new Source!Parameter();
+		var parDtype2 = new Source!TypeRef();
+		parDtype2.ref = Source!PrimitiveType.all.selectOne(p|p.name="int");
+		parD2.type = parDtype2;
+		parD2.name = "d";
+		opSig.parameters.add(parD2);
+		opInterface.operations.add(opSig);
+		
+		// Add interface to current package.
+		pkg.interfaces.add(opInterface);
+		
+		// Make this interface required by stm.
+		stm.rInterfaces.add(opInterface);
+		//s.rInterfaces.add(opInterface);
+		
+		// Make IdeadlineCheck required by stm.
+		stm.rInterfaces.add(pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck"));
+		//s.rInterfaces.add(pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck"));
+		
+		
+		// Adding OperationDef to current package.
+		pkg.operations.add(op);
+		
+		// Delete interfaces if they are empty as the result of the operations
+		// above, otherwise introduce them in the package, and make them required by
+		// the new operation.
+		if (ReqOps.operations.size == 0) 	{ delete ReqOps; 	} else { pkg.interfaces.add(ReqOps); op.rInterfaces.add(ReqOps); }
+		if (ReqEvents.events.size == 0)		{ delete ReqEvents;	} else { pkg.interfaces.add(ReqEvents); op.interfaces.add(ReqEvents); }
+		if (ReqVars.variableList.size == 0) { delete ReqVars; 	} else { pkg.interfaces.add(ReqVars); op.rInterfaces.add(ReqVars); }
+		if (ReqClocks.clocks.size == 0)     { delete ReqClocks; } else { pkg.interfaces.add(ReqClocks); op.rInterfaces.add(ReqClocks); }
+				
+		printDebug("Added interfaces to package '" + pkg.name + "' and operation '" + op.name + "'");	
+	
+		
+		if (debug)
+		{
+			//printDebug("IntroduceSimpleOperation");
+			//for (ts in op.transitions) {
+				//printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ")");
+			  printDebug("Exit Eliminate Deadline From Action In Composite State of a RoboChart machine");
+			//}
+		}
+	}
+}
+*/
+
+/*
+// Complex rule to eliminate deadline expressions from actions in a composite state of a state-machine of a controller.
+pattern EliminateDeadlineFromActionInCompositeStateOldVersion  
+	 pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	stm : Source!StateMachineDef from: pkg.machines,
+	s 	: Source!State	
+		// One of the states of stm
+		from: stm.closure(x:Source!NodeContainer|x.nodes),		      
+	t 	: Source!Transition from: s.transitions//, par: Source!ParStmt
+	{
+	
+	match: s.nodes.size() > 0 
+	       and t = s.transitions.selectOne(t1 | not(t1.action = null) and t1.action.isKindOf(Source!TimedStatement))	
+	do {
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		
+		printDebug("Eliminate Deadline from Action in a Composite State  "); 
+		// printDebug("s.name " + s.name + " t.name " + t.name + " t.action " + t.action); 
+		 printDebug(" t.name " + t.name + " t.action " + t.action); 
+		//printDebug("ac " + ac);
+		
+		// Create the new state, and the new transitions.
+        var newState = new Source!State();
+		newState.name 	= "SAux_EDFA_" + t.name;//s.name + "_" + t.name;
+			
+		// Attributes of newState
+		var duringAction = new DuringAction();
+		duringAction.action = new Call();
+		
+		var interface = pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck");
+		var opSigDeadlineCheck = interface.operations.selectOne(op | op.name = "deadlineCheck");
+		
+		duringAction.action.`operation` = opSigDeadlineCheck;
+		//Adding the parameter
+		//printDebug("t.action.deadline " + t.action.deadline);
+		duringAction.action.args.add(t.action.deadline); 
+		
+		//Adding the action
+		newState.actions.add(duringAction);
+		
+		var initial 	= new Source!Initial();
+		initial.name	= "i_EDFA";
+		
+		var s1 = new Source!State();
+		s1.name 	= "S_EDFA" + t.name;
+		
+		var final 	= new Source!Final();
+		final.name 	= "f_EDFA";
+		
+		var t0 = new Source!Transition();
+		t0.source = initial;
+		t0.target = s1;
+		t0.name	  = "t0_EDFA_" + t.name;
+		
+		var t1 = new Source!Transition();
+		t1.source = s1;
+		t1.target = final;
+		t1.name	  = "t1_EDFA_" + t.name;
+		
+		//Creating the action of the new transition
+		var seqStatement = new Source!SeqStatement();
+		var actionSeq1 = t.action.stmt;
+		printDebug("actionSeq1 " + actionSeq1);
+		printDebug("t.action " + t.action);
+		
+		//Creating the variable g
+		var newVar = new Source!Variable();
+		newVar.name = "g_EDFA" + t.name; //+ newState.name;
+		
+		var newVartype = new Source!TypeRef();
+		newVartype.ref = Source!PrimitiveType.all.selectOne(p|p.name="boolean");
+		newVar.type = newVartype;
+        printDebug("newVar " + newVar);
+		var initialVar = new Source!BooleanExp();
+		initialVar.value = "false";
+		
+		newVar.initial = initialVar; 
+		
+		var trueVar = new Source!BooleanExp();
+		trueVar.value = "true";
+		
+		var varRef = new Source!VarRef();
+	    varRef.name = newVar;
+		
+		var actionSeq2 = new Source!Assignment();
+		actionSeq2.left = varRef;
+		actionSeq2.right = trueVar;
+		
+		seqStatement.statements.addAll(Sequence{actionSeq1,actionSeq2}); //
+
+		t0.action = seqStatement;
+		printDebug("t0.action " + t0.action);
+		
+		newState.nodes.addAll(Set{initial,final,s1});
+		newState.transitions.add(t0,t1);
+
+		//Creating new transition from newState to S1
+		var t1 = new Source!Transition();
+		t1.source = newState;
+		t1.target = t.target;
+		t1.name	= "tEDFA_" + t.name; //+ newState;
+		
+        var refExp = new Source!RefExp();
+		refExp.ref = newVar;
+
+		t1.condition = refExp; 
+	    printDebug("t1.condition " + t1.condition);
+		
+		t.action = null;
+		//printDebug("t.action " + t.action);
+		
+		//Adding the variable g to stm
+		var variableList = new Source!VariableList();
+		variableList.vars.add(newVar);
+		variableList.modifier = VariableModifier#VAR;
+		stm.variableList.add(variableList);
+		//Adding nodes and transitions
+		s.nodes.add(newState);
+		s.transitions.add(t1);
+		
+		if (debug)
+		{
+			//printDebug("IntroduceSimpleOperation");
+			//for (ts in op.transitions) {
+				//printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ")");
+			  printDebug("Exit Eliminate Deadline from Action in a Composite State");
+			//}
+		}
+	}
+}*/
+
+/*
+pattern EliminateParStmtInCompositeState  
+	 pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	stm : Source!StateMachineDef from: pkg.machines,
+	s 	: Source!State	
+		// One of the states of stm
+		from: stm.closure(x:Source!NodeContainer|x.nodes),		      
+	t 	: Source!Transition from: s.transitions//, par: Source!ParStmt
+	{
+	
+	match: s.nodes.size() > 0 
+	       //and not(t.action = null) and	t.action.isTypeOf(Source!ParStmt) 
+	       //and s.transitions.exists(t1 | not(t1.action = null) and t.action.isKindOf(Source!ParStmt))
+	       and t = s.transitions.selectOne(t1 | not(t1.action = null) and t1.action.isKindOf(Source!ParStmt))
+	       
+	do { 
+	printDebug("Eliminate ParStmt In Composite State of a RoboChart Machine");
+			
+		t.action = t.action.stmt;
+					
+		if (debug) {	
+	        printDebug("Transition '" + t.name + "' from '" + t.source.name +  "' to '" + t.target.name + "' (action: " + t.action + ", trigger: "+ t.trigger +")");
+		    printDebug("Exit Eliminate ParStmt In Composite State of a RoboChart Machine");
+			//for (ts in stm.transitions) {
+			//	printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ", trigger: "+ ts.trigger +")");
+			//}
+		}
+	}
+}
+*/
+
+
+//////////////////////////////////////////////////////////////////////////////-
+//////////////////////////////////////////////////////////////////////////////-
+//-Rules to be applied in an Operation
+//////////////////////////////////////////////////////////////////////////////-
+//////////////////////////////////////////////////////////////////////////////-
+
+// The following rule breaks a sequence of statements in a Transition's action
+// into actions across a sequence of transitions and states.
+/*
+pattern SeparateTriggerFromActionInOperation 
+   pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	opDef : Source!OperationDef from: pkg.operations,     
+	t 	: Source!Transition from: opDef.transitions {
+	match:not ( (not (t.trigger = null) and t.trigger._type = TriggerType#EMPTY) and t.start = null and t.deadline = null and t.condition = null) 
+		and not (t.action = null) 
+		and not (t.trigger = null) 
+	do {
+	    printDebug("Separate Trigger From Action in an Operation");
+	    printDebug("t.name " + t.name + " t.action " + t.action);
+		var newJunction = new Source!Junction();
+		newJunction.name = t.name + "_jSTFA"; //_nSTFA
+
+		var newTransition = new Source!Transition();
+		newTransition.name = t.name + "_tSTFA"; //_nSTFA
+		
+		newTransition.source = newJunction;
+		newTransition.target = t.target;
+		newTransition.action = t.action;
+		
+		t.target = newJunction;
+		
+		// Add the new transition and junction to the StateMachineDef.
+		opDef.transitions.add(newTransition);
+		opDef.nodes.add(newJunction);
+		
+		// No need to remove the action from 't' because an action is contained
+		// in a transition. (MSCF Not sure about that)
+		//MSCF added 28/07
+		// I had to remove. Maybe, because now we are in the context of a RCPackage
+		// If I do not remove, a transition with trigger (and/or condition), 
+		// and an action may lead to an error, because the program will first apply
+		// SeparateTriggerFromAction, and then will try, for instance, to slip action,
+		// but considering the original transition (I have some examples). 
+		// It seems that now newTransition.action = t.action does not remove the condition
+		// from the original transition.
+		t.action = null;
+
+	if (debug) {
+	        
+	        printDebug("Transition '" + t.name + "' from '" + t.source.name +  "' to '" + t.target.name + "' (trigger: " + t.trigger + ")" + "' (action: " + t.action + ")");
+			printDebug("NewTransition '" + newTransition.name + "' from '" + newTransition.source.name +  "' to '" + newTransition.target.name + "' (trigger: " + newTransition.trigger + ")" + "' (action: " + newTransition.action + ")");
+			printDebug("Exit Separate Trigger from Action in an Operation");
+			//for (ts in stm.transitions) {
+			//	printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ")");
+			//}
+		}
+	}
+}
+*/
+
+// Complex rule to replace deadline expressions and guards in an operation
+/* Old version
+pattern Eliminate_deadline_from_trigger_in_OperationDef
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	opDef : Source!OperationDef
+		// For convenience of introducing new elements into the model 
+		// we also pick the containing RCPackage.
+		from: pkg.operations,
+	s 	: Source!State	
+		// One of the states of stm
+		from: opDef.closure(x:Source!NodeContainer|x.nodes),
+	t 	: Source!Transition {
+		// One of the transitions with deadline	
+	match: t.source = s and not(t.deadline = null)
+	do {
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		printDebug("Eliminate Deadline From Trigger in opDef"); 
+		// Create interfaces to hold new declarations for variables/operations/events used by the deadline and guard expressions
+		var ReqVars 	= new Source!Interface();
+		var ReqOps 		= new Source!Interface();
+		var ReqClocks	= new Source!Interface();
+		
+		ReqVars.name 	= "ReqVars_deadline" + opDef.name + "_" + s.name + "_" + t.name;
+		//ReqOps.name 	= "ReqOps_" + stm.name + "_" + s.name + "_" + t.name;
+		//ReqClocks.name 	= "ReqClocks_" + stm.name + "_" + s.name + "_" + t.name;
+							
+		// THIS replacement can be applied direct because end is eliminated from t when
+		// assigned to the deadlineCheck argument
+		replaceUsedVariablesEDFT(ReqVars,t.deadline);
+		printDebug("Redeclared used variables and constants in an new interface '" 
+					+ ReqVars.name 
+					+ "' and replaced references to these variables in a deadline expression.");	
+		
+		var auxCondition = ecoreUtil.copy(t.condition);	
+		printDebug("auxCondition " + auxCondition);		
+		// NEEDS TO COPY and apply the replacement to the copy
+		if (t.condition <> null){
+		   
+			replaceUsedVariablesEDFT(ReqVars,t.condition);
+			printDebug("Redeclared used variables and constants in an new interface '" 
+					+ ReqVars.name 
+					+ "' and replaced references to these variables in a condition.");	
+			//replaceClocks(ReqClocks, t.condition);		
+		 								 
+		}		
+		////////////////////////////////////////////////////////////////////////////////////////////////-		
+		// Create the new operation, and a new signature for inclusion in the interface.
+		var op 		= new Source!OperationDef();
+		var opSig 	= new Source!OperationSig();
+		
+		op.name 	= "normal_" + opDef.name + "_" + s.name + "_" + t.name + "_" + "dop";
+		opSig.name 	= "normal_" + opDef.name + "_" + s.name + "_" + t.name + "_" + "dop"; 
+		
+		// The operation has an Initial junction and a Final state.
+		var opInitial 	= new Source!Initial();
+		opInitial.name	= "i0";
+		var opStateS0 	= new Source!State();
+		opStateS0.name 	= "S0";
+		
+		// It has a transition from opInitial to opStateS0
+		var transitionT0 = new Source!Transition();
+		transitionT0.source = opInitial;
+		transitionT0.target = opStateS0;
+		transitionT0.name	  = "t0";
+		
+		
+		////////////////////////////////////////////-
+		// State machine of composed state stateS0 //
+		////////////////////////////////////////////-
+		// States
+		var opInitialS0 	= new Source!Initial();
+		opInitialS0.name	= "i0_S0";
+		var opStateS1 	= new Source!State();
+		opStateS1.name 	= "S1";
+		var opStateS2 	= new Source!State();
+		opStateS2.name 	= "S2";
+		
+		// Transition from the initial state to opStateS1
+		var transitionT1 = new Source!Transition();
+		transitionT1.source = opInitialS0;
+		transitionT1.target = opStateS1;
+		transitionT1.name	  = "t0";
+		
+		// Transiftion from opStateS1 to opStateS2
+		var transitionT2 = new Source!Transition();
+		transitionT2.source = opStateS1;
+		transitionT2.target = opStateS2;
+		transitionT2.name	  = "t1";
+		// MAYBE there is no guard originally
+		//transitionT2.condition = ecoreUtil.copy(t.condition);
+		if (not (t.condition == null)) {
+		   transitionT2.condition = t.condition;    // ecoreUtil.copy(t.condition);   
+		} 
+		else {
+		   transitionT2.condition = new Source!BooleanExp();
+		   transitionT2.condition.value = "true";
+		}
+		
+	    // Transition from opStateS2 to opStateS1
+		var transitionT3 = new Source!Transition();
+		transitionT3.source = opStateS2;
+		transitionT3.target = opStateS1;
+		transitionT3.name	  = "t2";
+		transitionT3.condition = new Source!Not();
+		//transitionT3.condition.exp = ecoreUtil.copy(t.condition);
+		transitionT3.condition.exp = ecoreUtil.copy(transitionT2.condition); //new references????
+		
+		// Attributes of stateS2
+		var duringAction = new DuringAction();
+		duringAction.action = new Call();
+		
+		//Added MSCF
+		var interface = pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck");
+		var opSigDeadlineCheck = interface.operations.selectOne(op | op.name = "deadlineCheck");
+		
+		duringAction.action.`operation` = opSigDeadlineCheck;
+		
+		//Adding the parameter
+		duringAction.action.args.add(t.deadline); 
+		//Adding the action
+		opStateS2.actions.add(duringAction);
+		
+		
+		// Removing deadline expression
+		// t.deadline = null; Already removed by the assignment above
+		
+		// Adding during action to opStateS0: either existing during action of s or
+		// a new op call to an operation that behaves like skip 
+			
+		var a = s.actions.selectOne(a | a.isKindOf(DuringAction)); //Added s in actions
+		if (not (a == null)) {
+		    opStateS0.actions.add(a);
+		    
+		   // var op = pkg.controllers.lOperations.select(op : Source!OperationDef)
+		    for ( op : Source!ControllerDef 
+				in select(c:Source!ControllerDef|c.lOperations.exists(s|getOperation(s)==opDef))) 
+		{
+		    
+		    
+		    printDebug("action " + a.action.`operation`);
+		    for (c in pkg.controllers){
+		    printDebug("c in pkg.controllers" +  c.name);
+		      for (o in c.lOperations){
+		       printDebug("o in c.lOperations " +  o.name);
+		         if (o.isKindOf(Source!OperationDef)){
+		          if (a.action.`operation`.name.equals(o.name)){
+		           printDebug(" o.rInterfaces " + o.rInterfaces);
+		           op.rInterfaces.addAll(o.rInterfaces);  
+		          }
+		            
+		         }
+		         else {
+		         if (a.action.`operation`.name.equals(o.ref.name)){
+		           printDebug(" o.rInterfaces " + o.ref.rInterfaces);
+		           op.rInterfaces.addAll(o.ref.rInterfaces); 
+		          }
+		         }
+		      }
+		      
+		    }
+		    //printDebug("action " + a.action.`operation`.rInterfaces);  
+		  
+		    
+		    
+		   
+		    for (r in stm.rInterfaces){
+		       printDebug("r.name = " + r.name);
+		       for (o in r.operations){
+		           if (o.name.equals(a.action.`operation`.name)){
+		             op.rInterfaces.add(r);
+		             printDebug("interface to be added in op = " + r);
+		          }
+		    }
+		    }
+		    
+			}	
+		}			   
+
+		   	
+		// Adding created operation op as during action of s
+        
+		var sDuringAction = new DuringAction();
+		sDuringAction.action = new Call();
+		sDuringAction.action.`operation` = opSig;
+
+		s.actions.add(sDuringAction); // assuming the original one was removed by the assignment to a above
+		
+		// Add node container to opStateS1
+		//opStateS1.nodes.addAll(Set{opInitialS0,opStateS1,opStateS2});
+		// Add node container to opStateS0
+		opStateS0.nodes.addAll(Set{opInitialS0,opStateS1,opStateS2});
+		opStateS0.transitions.addAll(Set{transitionT1,transitionT2,transitionT3});
+
+        // Add node container to op
+		op.nodes.addAll(Set{opInitial,opStateS0});
+		op.transitions.add(transitionT0);	
+    		
+		// Add OperationDef to current package.
+		pkg.operations.add(op);
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+		
+		// Delete interface for ReqVars if it is empty as the result of the operations
+		// above, otherwise introduce them in the package, and make them required by
+		// the new operation.
+		if (ReqVars.variableList.size() == 0) { delete ReqVars; 	} else { pkg.interfaces.add(ReqVars); op.interfaces.add(ReqVars); }//op.rInterfaces.add(ReqVars)
+		//if (ReqClocks.clocks.size() == 0)     { delete ReqClocks; 	} else { pkg.interfaces.add(ReqClocks); op.rInterfaces.add(ReqClocks); }
+		// Fetch interface (from the package) for the deadlineCheck op
+		// This interface was introduced by a previous rule
+		// Search for this instead of using a fixed name.
+		op.rInterfaces.add(pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck"));
+			
+		printDebug("Added interfaces to package '" + pkg.name + "' and operation '" + op.name + "'");	
+		////////////////////////////////////////////////////////////////////////////////////////////////-	
+		// For each ControllerDef in the set of all controllers 'c' in context (Source!ControllerDef)
+		// for which the 'machines' attribute contains 'stm' or references 'stm', then introduce a
+		// OperationRef element whose 'ref' attribute points to 'op'.
+		for ( c : Source!ControllerDef 
+				in select(c:Source!ControllerDef|c.lOperations.exists(s|getOperation(s)==opDef))) 
+		{
+			var opRef 	= new Source!OperationRef();
+			opRef.ref 	= op;
+			opRef.name	= c.name + "_ref_" + op.name;
+			c.lOperations.add(opRef);
+			printDebug("Adding reference to operation in controller '" + c.name + "'");
+		}
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+		// Declare an interface that contains the new operation		
+		var opInterface = new Source!Interface();
+		opInterface.name = "I_" + op.name;
+		opInterface.operations.add(opSig);
+		
+		// Add interface to current package.
+		pkg.interfaces.add(opInterface);
+		
+		// Make this interface required by opDef
+		opDef.rInterfaces.add(opInterface);
+		
+		// Make IdeadlineCheck required by stm.
+		//stm.rInterfaces.add(pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck"));
+		
+		t.condition = auxCondition;
+		
+		if (debug)
+		{
+			//printDebug("IntroduceSimpleOperation");
+			//for (ts in op.transitions) {
+				//printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ")");
+			  printDebug("Exit Eliminate Deadline From Trigger");
+			//}
+		}
+	}
+}
+*/
+// Complex rule to replace deadline expressions and guards in a state-machine of a controller.
+pattern Eliminate_deadline_from_trigger_in_OperationDef
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	opDef : Source!OperationDef
+		// For convenience of introducing new elements into the model 
+		// we also pick the containing RCPackage.
+		from: pkg.operations,
+	s 	: Source!State	
+		// One of the states of stm
+		from: opDef.nodes,
+		//stm.closure(x:Source!NodeContainer|x.nodes),
+	t 	: Source!Transition {
+		// One of the transitions with deadline	
+	match: t.source = s and not(t.deadline = null)
+	do {
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		// Create interfaces to hold new declarations for variables/operations/events used by the deadline and guard expressions
+		printDebug("Eliminate Deadline From Trigger");
+		printDebug("state " + s.name + " transition " + t.name); 
+		
+        var Req 	= new Source!Interface();
+		var DefEvents	= new Source!Interface();
+		
+		Req.name 	= "req_" + opDef.name + "_" + s.name + "_" + t.name;
+		//Req.name 	= "req_" + "normal_" + opDef.name + "_" + s.name + "_" + t.name + "_" + "dop";
+	    DefEvents.name 	= "defEvents_" 	+ opDef.name + "_" + s.name + "_" + t.name;
+	    //DefEvents.name 	= "defEvents_" + "normal_" + opDef.name + "_" + s.name + "_" + t.name + "_" + "dop";
+	
+							
+		// THIS replacement can be applied direct because end is eliminated from t when
+		// assigned to the deadlineCheck argument
+		//replaceUsedVariables(Req,t.deadline);
+		usedVars(Req,t.deadline);
+		
+		var auxCondition = ecoreUtil.copy(t.condition);	
+		printDebug("auxCondition " + auxCondition);	
+		printDebug("t.condition " + t.condition);			
+		// NEEDS TO COPY and apply the replacement to the copy
+		if (t.condition <> null){
+			replaceUsedVariables(Req,t.condition);
+			//usedVars(Req,t.condition);
+		
+	   
+	   // replaceClocks(Req, t.condition); //fix it	
+	   usedClocks(Req, t.condition);	
+		 								 
+		}		
+		////////////////////////////////////////////////////////////////////////////////////////////////-		
+		// Create the new operation, and a new signature for inclusion in the interface.
+		var op 		= new Source!OperationDef();
+		var opSig 	= new Source!OperationSig();
+		
+		op.name 	= "normal_" + opDef.name + "_" + s.name + "_" + t.name + "_" + "dop";
+		opSig.name 	= "normal_" + opDef.name + "_" + s.name + "_" + t.name + "_" + "dop"; 
+		
+		// The operation has an Initial junction and a Final state.
+		var opInitial 	= new Source!Initial();
+		opInitial.name	= "i0";
+		var opStateS0 	= new Source!State();
+		opStateS0.name 	= "S0";
+		
+		// It has a transition from opInitial to opStateS0
+		var transitionT0 = new Source!Transition();
+		transitionT0.source = opInitial;
+		transitionT0.target = opStateS0;
+		transitionT0.name	  = "t0";
+		
+		////////////////////////////////////////////-
+		// State machine of composed state stateS0 //
+		////////////////////////////////////////////-
+		// States
+		var opInitialS0 	= new Source!Initial();
+		opInitialS0.name	= "i0_S0";
+		var opStateS1 	= new Source!State();
+		opStateS1.name 	= "S1";
+		var opStateS2 	= new Source!State();
+		opStateS2.name 	= "S2";
+		
+		// Transition from the initial state to opStateS1
+		var transitionT1 = new Source!Transition();
+		transitionT1.source = opInitialS0;
+		transitionT1.target = opStateS1;
+		transitionT1.name	  = "t0";
+		
+		// Transiftion from opStateS1 to opStateS2
+		var transitionT2 = new Source!Transition();
+		transitionT2.source = opStateS1;
+		transitionT2.target = opStateS2;
+		transitionT2.name	  = "t1";
+		// MAYBE there is no guard originally
+		//transitionT2.condition = ecoreUtil.copy(t.condition);
+		if (not (t.condition == null)) {
+		   transitionT2.condition = t.condition; 
+		   //ecoreUtil.copy(t.condition);   
+		} 
+		else {
+		   transitionT2.condition = new Source!BooleanExp();
+		   transitionT2.condition.value = "true";
+		}
+		
+	    // Transition from opStateS2 to opStateS1
+		var transitionT3 = new Source!Transition();
+		transitionT3.source = opStateS2;
+		transitionT3.target = opStateS1;
+		transitionT3.name	  = "t2";
+		transitionT3.condition = new Source!Not();
+		//transitionT3.condition.exp = ecoreUtil.copy(t.condition);
+		transitionT3.condition.exp = ecoreUtil.copy(transitionT2.condition); //new references????
+		
+		// Attributes of stateS2
+		var duringAction = new DuringAction();
+		duringAction.action = new Call();
+		
+		//Added MSCF
+		var interface = pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck");
+		var opSigDeadlineCheck = interface.operations.selectOne(op | op.name = "deadlineCheck");
+		
+		duringAction.action.`operation` = opSigDeadlineCheck;
+		
+		//Adding the parameter
+		duringAction.action.args.add(t.deadline); 
+		//Adding the action
+		opStateS2.actions.add(duringAction);
+		
+		
+		// Removing deadline expression
+		// t.deadline = null; Already removed by the assignment above
+		
+		// Adding during action to opStateS0: either existing during action of s or
+		// a new op call to an operation that behaves like skip 
+		 	
+		var a = s.actions.selectOne(a | a.isKindOf(DuringAction)); //Added s in actions
+		if (not (a == null)) {
+		//The state has a during action
+		//In the strategy, it is always an operation call
+		    usedOps(Req,a);
+		    
+		    printDebug(" reqIOps " + reqIOps);
+		//Adding the required interfaces into op
+		for (r in reqIOps){
+		   op.rInterfaces.add(r);
+		}
+		//op.rInterfaces.add(reqIOps);
+		reqIOps = new Set(Source!Interface);
+		
+		//op.interfaces.addAll(defEvIOps);
+		//op.events.addAll(defEvOps);
+		printDebug(" defEvIOps " + defEvIOps);
+		for (i in defEvIOps){
+		  op.interfaces.add(i);
+		}
+		
+		
+		printDebug(" defEvOps " + defEvOps);
+		
+		if (defEvOps.size()>0){
+		//Creating new interface for events declared outside interfaces
+		var defLocalEvOps =  new Source!Interface();
+		defLocalEvOps.name 	= "defLocalEvOps_" 	+ opDef.name + "_" + s.name + "_" + t.name;
+			for (ev in defEvOps){
+		     defLocalEvOps.events.add(ev);
+		   }
+		   pkg.interfaces.add(defLocalEvOps); 
+		   op.interfaces.add(defLocalEvOps);
+		}
+		
+		if (not mapEventsInterface.isEmpty()){
+		//We need to create projections  of the interfaces 
+		//in mapEventsInterface with only the events
+		  for (i in mapEventsInterface.keySet()){
+		        //Creating a new interface
+		        var newInterface = new Source!Interface();
+		        newInterface.name = i.name + "_events_" + opDef.name + "_" + s.name + "_" + t.name;
+		        newInterface.events.addAll(mapEventsInterface.get(i));
+		        printDebug(" newInterface.events.addAll") + newInterface.events;
+		        
+		        op.interfaces.add(newInterface);
+		        pkg.interfaces.add(newInterface);
+		        
+		  
+		  }
+		
+		}
+		
+		defEvIOps = new Set(Source!Interface);
+		defEvOps = new Set(Source!Event);
+		mapEventsInterface = new Map(Source!Interface,Set(Source!Event));
+		    
+		opStateS0.actions.add(a);
+		
+		
+				}				   
+ 	
+		// Adding created operation op as during action of s
+        
+		var sDuringAction = new DuringAction();
+		sDuringAction.action = new Call();
+		sDuringAction.action.`operation` = opSig;
+
+		s.actions.add(sDuringAction); // assuming the original one was removed by the assignment to a above
+		
+		// Add node container to opStateS1
+		//opStateS1.nodes.addAll(Set{opInitialS0,opStateS1,opStateS2});
+		// Add node container to opStateS0
+		opStateS0.nodes.addAll(Set{opInitialS0,opStateS1,opStateS2});
+		opStateS0.transitions.addAll(Set{transitionT1,transitionT2,transitionT3});
+
+        // Add node container to op
+		op.nodes.addAll(Set{opInitial,opStateS0});
+		op.transitions.add(transitionT0);	
+    		
+		// Add OperationDef to current package.
+		pkg.operations.add(op);
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+		
+		// Delete interface for ReqVars if it is empty as the result of the operations
+		// above, otherwise introduce them in the package, and make them required by
+		// the new operation.
+		
+		
+		if (Req.operations.size() == 0 and Req.variableList.size() == 0 and Req.clocks.size() == 0) 	
+		   { delete Req; printDebug(" no if");	}
+		else { pkg.interfaces.add(Req); op.rInterfaces.add(Req);  printDebug(" no else");}
+	   
+		// Fetch interface (from the package) for the deadlineCheck op
+		// This interface was introduced by a previous rule
+		// Search for this instead of using a fixed name.
+		op.rInterfaces.add(pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck"));
+			
+		printDebug("Added interfaces to package '" + pkg.name + "' and operation '" + op.name + "'");	
+		////////////////////////////////////////////////////////////////////////////////////////////////-	
+		// For each ControllerDef in the set of all controllers 'c' in context (Source!ControllerDef)
+		// for which the 'machines' attribute contains 'stm' or references 'stm', then introduce a
+		// OperationRef element whose 'ref' attribute points to 'op'.
+		for ( c : Source!ControllerDef 
+				in select(c:Source!ControllerDef|c.lOperations.exists(op|getOperation(op)==opDef))) 
+		{
+			var opRef 	= new Source!OperationRef();
+			opRef.ref 	= op;
+			opRef.name	= c.name + "_ref_" + op.name;
+			c.lOperations.add(opRef);
+			printDebug("Adding reference to operation in controller '" + c.name + "'");
+		}
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+		// Declare an interface that contains the new operation		
+		var opInterface = new Source!Interface();
+		opInterface.name = "I_" + op.name;
+		opInterface.operations.add(opSig);
+		
+		// Add interface to current package.
+		pkg.interfaces.add(opInterface);
+		
+		// Make this interface required by opDef.
+		opDef.rInterfaces.add(opInterface);
+		
+		// Make IdeadlineCheck required by opDef.
+		opDef.rInterfaces.add(pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck"));
+		
+		t.condition = auxCondition;
+		
+		if (debug)
+		{
+			//printDebug("IntroduceSimpleOperation");
+			//for (ts in op.transitions) {
+				//printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ")");
+			  printDebug("Exit Eliminate Deadline From Trigger in an OperationDef");
+			//}
+		}
+	}
+}
+
+pattern Eliminate_deadline_from_trigger_in_CompositeState_of_OperationDef
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	opDef : Source!OperationDef
+		// For convenience of introducing new elements into the model 
+		// we also pick the containing RCPackage.
+		from: pkg.operations,
+	s 	: Source!State	
+		// One of the states of stm
+		from: opDef.closure(x:Source!NodeContainer|x.nodes.selectByKind(Source!NodeContainer)),
+	t 	: Source!Transition, ss : Source!State {
+		// One of the transitions with deadline	
+	match: s.nodes.size() > 0 
+	       and  ss = s.nodes.selectOne(s1 | s1.isKindOf(Source!State))
+		   and 	t.source = ss and not(t.deadline = null)
+	do {
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		// Create interfaces to hold new declarations for variables/operations/events used by the deadline and guard expressions
+		printDebug("Eliminate Deadline From Trigger of a composite state in an operation");
+		printDebug("composite state " + s.name + " internal state " + ss.name + " transition " + t.name); 
+		
+        
+        var Req 	= new Source!Interface();
+		var DefEvents	= new Source!Interface();
+		
+		Req.name 	= "req_" + opDef.name + "_" + s.name + "_" + ss.name + "_" + t.name;
+	    //Req.name = "req_" + "normal_" + opDef.name + "_" + s.name + "_" + ss.name + "_" +  t.name + "_" + "dop";
+	    DefEvents.name 	= "defEvents_" 	+ opDef.name + "_" + s.name + "_" + ss.name + "_" + t.name;
+	    //DefEvents.name = "defEvents_" + "normal_" + opDef.name + "_" + s.name + "_" + ss.name + "_" +  t.name + "_" + "dop";
+	 
+							
+		// THIS replacement can be applied direct because end is eliminated from t when
+		// assigned to the deadlineCheck argument
+		//replaceUsedVariables(Req,t.deadline);
+		usedVars(Req,t.deadline);
+		/*printDebug("Redeclared used variables and constants in an new interface '" 
+					+ Req.name 
+					+ "' and replaced references to these variables in a deadline expression.");	
+		*/
+		var auxCondition = ecoreUtil.copy(t.condition);	
+		printDebug("auxCondition " + auxCondition);	
+		printDebug("t.condition " + t.condition);			
+		// NEEDS TO COPY and apply the replacement to the copy
+		if (t.condition <> null){
+			replaceUsedVariables(Req,t.condition);
+			//usedVars(Req,t.condition);
+		
+	    // replaceClocks(Req, t.condition); //fix it	
+	    usedClocks(Req, t.condition);									 
+		}		
+		////////////////////////////////////////////////////////////////////////////////////////////////-		
+		// Create the new operation, and a new signature for inclusion in the interface.
+		var op 		= new Source!OperationDef();
+		var opSig 	= new Source!OperationSig();
+		
+		op.name 	= "normal_" + opDef.name + "_" + s.name + "_" + ss.name + "_" +  t.name + "_" + "dop";
+		opSig.name 	= "normal_" + opDef.name + "_" + s.name + "_" + ss.name + "_" + t.name + "_" + "dop"; 
+		
+		// The operation has an Initial junction and a Final state.
+		var opInitial 	= new Source!Initial();
+		opInitial.name	= "i0";
+		var opStateS0 	= new Source!State();
+		opStateS0.name 	= "S0";
+		
+		// It has a transition from opInitial to opStateS0
+		var transitionT0 = new Source!Transition();
+		transitionT0.source = opInitial;
+		transitionT0.target = opStateS0;
+		transitionT0.name	  = "t0";
+		
+		////////////////////////////////////////////-
+		// State machine of composed state stateS0 //
+		////////////////////////////////////////////-
+		// States
+		var opInitialS0 	= new Source!Initial();
+		opInitialS0.name	= "i0_S0";
+		var opStateS1 	= new Source!State();
+		opStateS1.name 	= "S1";
+		var opStateS2 	= new Source!State();
+		opStateS2.name 	= "S2";
+		
+		// Transition from the initial state to opStateS1
+		var transitionT1 = new Source!Transition();
+		transitionT1.source = opInitialS0;
+		transitionT1.target = opStateS1;
+		transitionT1.name	  = "t0";
+		
+		// Transiftion from opStateS1 to opStateS2
+		var transitionT2 = new Source!Transition();
+		transitionT2.source = opStateS1;
+		transitionT2.target = opStateS2;
+		transitionT2.name	  = "t1";
+		// MAYBE there is no guard originally
+		//transitionT2.condition = ecoreUtil.copy(t.condition);
+		if (not (t.condition == null)) {
+		   transitionT2.condition = t.condition; 
+		   //ecoreUtil.copy(t.condition);   
+		} 
+		else {
+		   transitionT2.condition = new Source!BooleanExp();
+		   transitionT2.condition.value = "true";
+		}
+		
+	    // Transition from opStateS2 to opStateS1
+		var transitionT3 = new Source!Transition();
+		transitionT3.source = opStateS2;
+		transitionT3.target = opStateS1;
+		transitionT3.name	  = "t2";
+		transitionT3.condition = new Source!Not();
+		//transitionT3.condition.exp = ecoreUtil.copy(t.condition);
+		transitionT3.condition.exp = ecoreUtil.copy(transitionT2.condition); //new references????
+		
+		// Attributes of stateS2
+		var duringAction = new DuringAction();
+		duringAction.action = new Call();
+		
+		//Added MSCF
+		var interface = pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck");
+		var opSigDeadlineCheck = interface.operations.selectOne(op | op.name = "deadlineCheck");
+		
+		duringAction.action.`operation` = opSigDeadlineCheck;
+		
+		//Adding the parameter
+		duringAction.action.args.add(t.deadline); 
+		//Adding the action
+		opStateS2.actions.add(duringAction);
+		
+		
+		// Removing deadline expression
+		// t.deadline = null; Already removed by the assignment above
+		
+		// Adding during action to opStateS0: either existing during action of s or
+		// a new op call to an operation that behaves like skip 
+		 	
+		var a = s.actions.selectOne(a | a.isKindOf(DuringAction)); //Added s in actions
+		if (not (a == null)) {
+		//The state has a during action
+		//In the strategy, it is always an operation call
+		    usedOps(Req,a);
+		    
+		    printDebug(" reqIOps " + reqIOps);
+		//Adding the required interfaces into op
+		for (r in reqIOps){
+		   op.rInterfaces.add(r);
+		}
+		//op.rInterfaces.add(reqIOps);
+		reqIOps = new Set(Source!Interface);
+		
+		//op.interfaces.addAll(defEvIOps);
+		//op.events.addAll(defEvOps);
+		printDebug(" defEvIOps " + defEvIOps);
+		for (i in defEvIOps){
+		  op.interfaces.add(i);
+		}
+		
+		
+		printDebug(" defEvOps " + defEvOps);
+		
+		if (defEvOps.size()>0){
+		//Creating new interface for events declared outside interfaces
+		var defLocalEvOps =  new Source!Interface();
+		defLocalEvOps.name 	= "defLocalEvOps_" 	+ opDef.name + "_" + s.name + "_" + ss.name + "_" + t.name;
+			for (ev in defEvOps){
+		     defLocalEvOps.events.add(ev);
+		   }
+		   pkg.interfaces.add(defLocalEvOps); 
+		   op.interfaces.add(defLocalEvOps);
+		}
+		
+		if (not mapEventsInterface.isEmpty()){
+		//We need to create projections  of the interfaces 
+		//in mapEventsInterface with only the events
+		  for (i in mapEventsInterface.keySet()){
+		        //Creating a new interface
+		        var newInterface = new Source!Interface();
+		        newInterface.name = i.name + "_events_" + opDef.name + "_" + s.name + "_" + ss.name + "_" + t.name;
+		        newInterface.events.addAll(mapEventsInterface.get(i));
+		        printDebug(" newInterface.events.addAll") + newInterface.events;
+		        
+		        op.interfaces.add(newInterface);
+		        pkg.interfaces.add(newInterface);  
+		  }
+		
+		}
+		
+		defEvIOps = new Set(Source!Interface);
+		defEvOps = new Set(Source!Event);
+		mapEventsInterface = new Map(Source!Interface,Set(Source!Event));
+		    
+		opStateS0.actions.add(a);
+		
+		
+		   
+				}				   
+
+		   	
+		// Adding created operation op as during action of s
+        
+		var sDuringAction = new DuringAction();
+		sDuringAction.action = new Call();
+		sDuringAction.action.`operation` = opSig;
+
+		s.actions.add(sDuringAction); // assuming the original one was removed by the assignment to a above
+		
+		// Add node container to opStateS1
+		//opStateS1.nodes.addAll(Set{opInitialS0,opStateS1,opStateS2});
+		// Add node container to opStateS0
+		opStateS0.nodes.addAll(Set{opInitialS0,opStateS1,opStateS2});
+		opStateS0.transitions.addAll(Set{transitionT1,transitionT2,transitionT3});
+
+        // Add node container to op
+		op.nodes.addAll(Set{opInitial,opStateS0});
+		op.transitions.add(transitionT0);	
+    		
+		// Add OperationDef to current package.
+		pkg.operations.add(op);
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+		
+		// Delete interface for ReqVars if it is empty as the result of the operations
+		// above, otherwise introduce them in the package, and make them required by
+		// the new operation.
+		
+		
+		if (Req.operations.size() == 0 and Req.variableList.size() == 0 and Req.clocks.size() == 0) 	
+		   { delete Req; printDebug(" no if");	}
+		else { pkg.interfaces.add(Req); op.rInterfaces.add(Req);  printDebug(" no else");}
+	   
+		// Fetch interface (from the package) for the deadlineCheck op
+		// This interface was introduced by a previous rule
+		// Search for this instead of using a fixed name.
+		op.rInterfaces.add(pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck"));
+			
+		printDebug("Added interfaces to package '" + pkg.name + "' and operation '" + op.name + "'");	
+		////////////////////////////////////////////////////////////////////////////////////////////////-	
+		// For each ControllerDef in the set of all controllers 'c' in context (Source!ControllerDef)
+		// for which the 'machines' attribute contains 'stm' or references 'stm', then introduce a
+		// OperationRef element whose 'ref' attribute points to 'op'.
+		for ( c : Source!ControllerDef 
+				in select(c:Source!ControllerDef|c.lOperation.exists(op|getOperation(op)==opDef))) 
+		{
+			var opRef 	= new Source!OperationRef();
+			opRef.ref 	= op;
+			opRef.name	= c.name + "_ref_" + op.name;
+			c.lOperations.add(opRef);
+			printDebug("Adding reference to operation in controller '" + c.name + "'");
+		}
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+		// Declare an interface that contains the new operation		
+		var opInterface = new Source!Interface();
+		opInterface.name = "I_" + op.name;
+		opInterface.operations.add(opSig);
+		
+		// Add interface to current package.
+		pkg.interfaces.add(opInterface);
+		
+		// Make this interface required by opDef.
+		opDef.rInterfaces.add(opInterface);
+		
+		// Make IdeadlineCheck required by opDef.
+		opDef.rInterfaces.add(pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck"));
+		
+		t.condition = auxCondition;
+		
+		if (debug)
+		{
+			//printDebug("IntroduceSimpleOperation");
+			//for (ts in op.transitions) {
+				//printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ")");
+			  printDebug("Exit Eliminate Deadline From Trigger in a composite state of an operation def");
+			//}
+		}
+	}
+}
+
+
+pattern SplitActionsInOperation 
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	opDef : Source!OperationDef from: pkg.operations,     
+	t 	: Source!Transition from: opDef.transitions
+	{
+	match: 	not(t.action = null) and t.action.isKindOf(Source!SeqStatement) 
+	do { 
+	
+	printDebug("Split Actions in an Operation ");
+	printDebug("opDef.name " + opDef.name);
+	printDebug("transition.name " + t.name + " t.action " + t.action);
+	
+	count = count+1;
+	
+	printDebug("opDef.name " + opDef.name);
+		// A new junction is created, and a unique name based on the transition t's
+		// name is given, plus the current size of the sequence. This is just an
+		// example, but in general it may be possible to implement an operation
+		// that walks the model to ensure locally unique names, thus obviating
+		// the need for an explicit decision every time a new element is created.
+	
+	
+		var newJunction = new Source!Junction();
+		printDebug("t.action " + t.action + " opDef.name " + opDef.name);
+		newJunction.name = t.name + "_j_" + t.action.statements.size() + "_" + (count+1);
+		
+		// A new Transition is created, whose source is t.source, and
+		// whose target is the newState. Name uniqueness also ensured
+		// by combining the name of 't' and the size of the sequence.
+		var newTransition = new Source!Transition();
+		newTransition.name = t.name + "_t_" + t.action.statements.size() + "_" + (count+1);
+		newTransition.target = t.target;
+		newTransition.source = newJunction;
+		newTransition.action = t.action;
+		
+		t.action = newTransition.action.statements.removeAt(0);
+		
+		if (newTransition.action.statements.size = 1) {
+			newTransition.action = newTransition.action.statements.first();
+		}
+		
+		t.target = newJunction;
+		
+		opDef.nodes.add(newJunction);
+		opDef.transitions.add(newTransition);
+		
+		if (debug) {
+		 printDebug("Transition '" + t.name + "' from '" + t.source.name +  "' to '" + t.target.name + "' (action: " + t.action + ", trigger: "+ t.trigger +")");
+		 printDebug("NewTransition '" + newTransition.name + "' from '" + newTransition.source.name +  "' to '" + newTransition.target.name + "' (action: " + newTransition.action + ", trigger: "+ newTransition.trigger +")");
+		 printDebug("Exit Split action in an Operation");	
+	       
+			//for (ts in stm.transitions) {
+			//	printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ", trigger: "+ ts.trigger +")");
+			//}
+		}
+	}
+}
+
+/*
+Initial version
+pattern SplitConditionalInOperation
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	opDef : Source!OperationDef from: pkg.operations,     
+	t 	: Source!Transition from: opDef.transitions
+	{
+	match: not (t.source.isKindOf(Source!Initial)) and
+	       not(t.action = null) and t.action.isKindOf(Source!IfStmt)
+
+	do { 
+	    printDebug("Split conditional in an Operation");
+	    
+	  
+//	    var isInitialSt = false;
+	   
+//	    if (t.source.isKindOf(Source!Initial) ){
+//	        printDebug("t.source.isKindOf(Source!Initial)");
+//	    	isInitialSt = true;
+//	    }
+	    
+		// Two new junctions are created, and four new transitions are created.  
+		// A unique name based on the transition t's name is adopted.  This is just an
+		// example, but in general it may be possible to implement an operation
+		// that walks the model to ensure locally unique names, thus obviating
+		// the need for an explicit decision every time a new element is created.
+		
+		var thenJunction = new Source!Junction();
+		thenJunction.name = t.name + "_thenJ_";
+		var elseJunction = new Source!Junction();
+		elseJunction.name = t.name + "_elseJ_";
+		
+		// Four new Transitions are created, two with source t.source, and
+		// whose target are the thenJunction and elseJunction. Name uniqueness also ensured
+		// by combining the name of 't' with some new strings.
+		var thenTransitionGuard = new Source!Transition();
+		thenTransitionGuard.name = t.name + "_thenTG_";
+		thenTransitionGuard.source = t.source;
+		thenTransitionGuard.target = thenJunction;
+		thenTransitionGuard.condition = ecoreUtil.copy(t.action.expression);
+		// TAKE CARE WITH CONTAINED ATTRIBUTES
+		var thenTransitionAction = new Source!Transition();
+		thenTransitionAction.name = t.name + "_thenTA_";
+		thenTransitionAction.source = thenJunction;
+		thenTransitionAction.target = t.target;
+		thenTransitionAction.action = t.action.then;
+		//
+		var elseTransitionGuard = new Source!Transition();
+		elseTransitionGuard.name = t.name + "_elseTG_";
+		elseTransitionGuard.source = t.source;
+		elseTransitionGuard.target = elseJunction;
+		elseTransitionGuard.condition = new Not(); // or new new OpenSTM!Not() ???
+		elseTransitionGuard.condition.exp = t.action.expression;
+		//
+		var elseTransitionAction = new Source!Transition();
+		elseTransitionAction.name = t.name + "_elseTA_";
+		elseTransitionAction.source = elseJunction;
+		elseTransitionAction.target = t.target;
+		elseTransitionAction.action = t.action.`else`; 
+		
+		
+//		if (isInitialSt){
+//		    var newJunction = new Source!Junction();
+//	        newJunction.name = t.name + "_initialJunction_";
+	        
+//	        thenTransitionGuard.source = newJunction;
+//	        elseTransitionGuard.source = newJunction;
+//	        var tinitial = new Source!Transition();  
+//	        tinitial.name = t.name + "_initial_";
+//	        tinitial.source = t.source;
+//	        tinitial.target = newJunction;
+//	        opDef.transitions.addAll(Set{tinitial,thenTransitionGuard,thenTransitionAction,elseTransitionGuard,elseTransitionAction});
+//		    opDef.transitions.remove(t);
+//		    delete(t);
+		    opDef.nodes.addAll(Set{newJunction,thenJunction,elseJunction});
+//		}
+        
+
+//		else {
+       
+       // Missing: add new junctions and transitions, remove t, check containement attributes
+		opDef.transitions.addAll(Set{thenTransitionGuard,thenTransitionAction,elseTransitionGuard,elseTransitionAction});
+		opDef.transitions.remove(t);
+		delete(t);
+		opDef.nodes.addAll(Set{thenJunction,elseJunction});
+		//}
+		
+		if (debug) {
+		    printDebug("Split conditional in an Operation");
+		    printDebug("Transition '" + t.name + "' from '" + t.source.name +  "' to '" + t.target.name + "' (action: " + t.action + ", trigger: "+ t.trigger +")");
+		
+			//for (ts in stm.transitions) {
+			//	printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ", trigger: "+ ts.trigger +")");
+			//}
+		}
+	}
+}
+*/
+
+
+
+//New version with only two transitions
+//Old version on 09/11 (see the next pattern)
+/*pattern SplitConditionalInOperation
+
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	opDef : Source!OperationDef from: pkg.operations,     
+	t 	: Source!Transition from: opDef.transitions
+	{
+	match: not (t.source.isKindOf(Source!Initial)) and
+	       not(t.action = null) and t.action.isKindOf(Source!IfStmt)
+
+	do { 
+	    printDebug("Split conditional in an Operation");
+	    
+	    
+		// Two new junctions are created, and four new transitions are created.  
+		// A unique name based on the transition t's name is adopted.  This is just an
+		// example, but in general it may be possible to implement an operation
+		// that walks the model to ensure locally unique names, thus obviating
+		// the need for an explicit decision every time a new element is created.
+		
+		//var thenJunction = new Source!Junction();
+		//thenJunction.name = t.name + "_thenJ_";
+		//var elseJunction = new Source!Junction();
+		//elseJunction.name = t.name + "_elseJ_";
+		
+		// Four new Transitions are created, two with source t.source, and
+		// whose target are the thenJunction and elseJunction. Name uniqueness also ensured
+		// by combining the name of 't' with some new strings.
+		var thenTransition = new Source!Transition();
+		thenTransition.name = t.name + "_thenTG_";
+		thenTransition.source = t.source;
+		thenTransition.target = t.target; //thenJunction;
+		thenTransition.condition = ecoreUtil.copy(t.action.expression);
+		thenTransition.action = t.action.then;
+		// TAKE CARE WITH CONTAINED ATTRIBUTES
+		//var thenTransitionAction = new Source!Transition();
+		//thenTransitionAction.name = t.name + "_thenTA_";
+		//thenTransitionAction.source = thenJunction;
+		//thenTransitionAction.target = t.target;
+		//thenTransitionAction.action = t.action.then;
+		
+		var elseTransition = new Source!Transition();
+		elseTransition.name = t.name + "_elseTG_";
+		elseTransition.source = t.source;
+		elseTransition.target = t.target;
+		elseTransition.condition = new Not(); 
+		elseTransition.condition.exp = t.action.expression;
+		elseTransition.action = t.action.`else`;
+		//
+		//var elseTransitionAction = new Source!Transition();
+		//elseTransitionAction.name = t.name + "_elseTA_";
+		//elseTransitionAction.source = elseJunction;
+		//elseTransitionAction.target = t.target;
+		//elseTransitionAction.action = t.action.`else`; 
+		
+       // Missing: add new junctions and transitions, remove t, check containement attributes
+		opDef.transitions.addAll(Set{thenTransition,elseTransition});
+		opDef.transitions.remove(t);
+		delete(t);
+		//opDef.nodes.addAll(Set{thenJunction,elseJunction});
+		//}
+		
+		if (debug) {
+		    printDebug("Split conditional in an Operation");
+		    printDebug("Transition '" + t.name + "' from '" + t.source.name +  "' to '" + t.target.name + "' (action: " + t.action + ", trigger: "+ t.trigger +")");
+		
+			//for (ts in stm.transitions) {
+			//	printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ", trigger: "+ ts.trigger +")");
+			//}
+		}
+	}
+}
+*/
+
+
+pattern EliminateParStmtInOperationDef 
+	 pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	opDef : Source!OperationDef from: pkg.operations,
+	t 	: Source!Transition  from: opDef.transitions
+	{
+	match: 	not (t.action = null) and t.action.isKindOf(Source!ParStmt) 
+	      
+	do { 
+		printDebug("EliminateParStmtInOperationDef  ");
+		t.action = t.action.stmt;
+					
+		if (debug) {
+	        printDebug("Eliminate ParStmt In OperationDef ");	
+	        printDebug("Transition '" + t.name + "' from '" + t.source.name +  "' to '" + t.target.name + "' (action: " + t.action + ", trigger: "+ t.trigger +")");
+		
+		}
+	}
+}
+
+//New version with only two transitions, 
+//and a junction between the condition and the action
+//Updated 09/11 (MSCF)
+pattern SplitConditionalInOperation
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	opDef : Source!OperationDef from: pkg.operations,     
+	t 	: Source!Transition from: opDef.transitions
+	{
+	match: not (t.source.isKindOf(Source!Initial)) and
+	       not(t.action = null) and t.action.isKindOf(Source!IfStmt)
+
+	do { 
+	    printDebug("Split conditional in an Operation");
+	    
+	    
+		// Two new junctions are created, and four new transitions are created.  
+		// A unique name based on the transition t's name is adopted.  This is just an
+		// example, but in general it may be possible to implement an operation
+		// that walks the model to ensure locally unique names, thus obviating
+		// the need for an explicit decision every time a new element is created.
+		
+		var thenJunction = new Source!Junction();
+		thenJunction.name = t.name + "_thenJ_";
+		var elseJunction = new Source!Junction();
+		elseJunction.name = t.name + "_elseJ_";
+		
+		// Four new Transitions are created, two with source t.source, and
+		// whose target are the thenJunction and elseJunction. Name uniqueness also ensured
+		// by combining the name of 't' with some new strings.
+		
+		var thenTransition = new Source!Transition();
+		var thenTransitionAction = new Source!Transition();
+		// one transition for the condition
+		thenTransition.name = t.name + "_thenTG_";
+		thenTransition.source = t.source;
+		thenTransition.target = thenJunction;
+		thenTransition.condition = ecoreUtil.copy(t.action.expression);
+		//thenTransition.action = t.action.then; //there is no action now
+		// one transition with the original action	
+		thenTransitionAction.name = t.name + "_thenTA_";
+		thenTransitionAction.source = thenJunction;
+		thenTransitionAction.target = t.target;
+		thenTransitionAction.action = t.action.then;
+		//
+		var elseTransition = new Source!Transition();
+		var elseTransitionAction = new Source!Transition();
+		
+		elseTransition.name = t.name + "_elseTG_";
+		elseTransition.source = t.source;
+		elseTransition.target = elseJunction;//t.target;
+		elseTransition.condition = new Not(); 
+		elseTransition.condition.exp = t.action.expression;
+		//elseTransition.action = t.action.`else`; //there is no action now
+		//
+		/*var elseTransitionAction = new Source!Transition();*/
+		elseTransitionAction.name = t.name + "_elseTA_";
+		elseTransitionAction.source = elseJunction;
+		elseTransitionAction.target = t.target;
+		elseTransitionAction.action = t.action.`else`; 
+		
+		//printDebug("before adding junctions and transitions");
+		
+       // Missing: add new junctions and transitions, remove t, check containement attributes
+		opDef.transitions.addAll(Set{thenTransition,thenTransitionAction, elseTransition,
+		                             elseTransitionAction});
+		opDef.transitions.remove(t);
+		delete(t);
+		opDef.nodes.addAll(Set{thenJunction,elseJunction});
+		
+		
+		if (debug) {
+		    printDebug("Split conditional in an Operation");
+		    printDebug("Transition '" + t.name + "' from '" + t.source.name +  "' to '" + t.target.name + "' (action: " + t.action + ", trigger: "+ t.trigger +")");
+		
+			//for (ts in stm.transitions) {
+			//	printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ", trigger: "+ ts.trigger +")");
+			//}
+		}
+	}
+}
+
+
+
+//Old version
+// Complex rule to eliminate deadline expressions in a state-machine of a controller.
+/*
+pattern EliminateDeadlineFromActionInOperation
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	opDef : Source!OperationDef from: pkg.operations,     
+	t 	: Source!Transition from: opDef.transitions
+	{
+		// One of the transitions with deadline	
+	match:  not(t.action = null) and t.action.isKindOf(Source!TimedStatement) and t.action.isKindOf(Source!Skip)
+            and not (opDef.name = "deadlineCheck")
+	      // not(t.action = null) and t.action.isKindOf(Source!TimedStatement) 	
+	do {
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		count=count+1;
+		printDebug("Eliminate Deadline From Action In Operation"); 
+		
+		printDebug("trasition.name " + t.name + " opDef.name " + opDef.name + " t.action "  + t.action);
+		//printDebug("t.action.deadline " + t.action.deadline);
+		
+		//Capture all variables used in an action
+		var contents = t.action.closure(x|x.eContents());
+		
+		// Create the new operation, and a new signature for inclusion in the interface.
+		var op 		= new Source!OperationDef();
+		var opSig 	= new Source!OperationSig();
+		
+		op.name 	= "deadlineInAction" + "_" + t.name + "_" + opDef.name;
+		opSig.name 	= "deadlineInAction" + "_" + t.name + "_" + opDef.name; 
+	
+	    // We calculate two sets, the variables in a 'VarRef' and those in a 'RefExp'.
+	    var varrefs = contents.select(y:Source!VarRef|true).collect(z:Source!VarRef|z.name).asSet();
+	    var varexps = contents.select(y:Source!RefExp|true).collect(z:Source!RefExp|z.ref).asSet();
+	
+	    var variableList = new Source!VariableList();
+	    var constantList = new Source!VariableList();
+	
+	    variableList.modifier = Source!VariableModifier#VAR;	// Variables
+	    constantList.modifier = Source!VariableModifier#CONST; 	// Constants
+	
+	    printDebug("varrefs " + varrefs);
+	    printDebug("varexps " + varexps);
+	    
+	    //OK, but error with required variables
+	     for (v in (varrefs+varexps)){      
+	       var newVar = ecoreUtil.copy(v);
+	       if (v.modifier == Source!VariableModifier#VAR)
+			variableList.vars.add(newVar);
+		   else
+			constantList.vars.add(newVar);	       
+			
+	        // Update all variable references to the old variable declaration 'v' => newVar.
+			for (varref in contents.select(x:Source!VarRef|x.name = v)) {
+				varref.name = newVar;
+			}
+			// Update all expression references to the old variable declaration 'v' => newVar.
+			for (refexp in contents.select(x:Source!RefExp|x.ref = v)) {
+				refexp.ref = newVar;
+			}
+		
+	    }
+	    
+	 
+		var ReqVars 	= new Source!Interface();
+		var ReqOps 		= new Source!Interface();
+		ReqOps.name = op.name + "Op";
+	
+	    //Capture all Calls in t.action
+		var opCalls     = contents.select(y:Source!Call|true).collect(op:Source!Call|op).asSet();
+	    printDebug("opCalls " + opCalls);
+	    
+		var interfaceOp = opDef.rInterfaces.select(i | i.operations.size > 0).asSet();
+		 printDebug("interfaceOp " + interfaceOp);
+		//var opSigs = interfaceOp.operations.select(y:Source!OperationSig|true).collect(op:Source!OperationSig|op).asSet();
+		
+		var opSigs = new Set(Source!OperationSig);
+		for (op in interfaceOp){
+		   opSigs.addAll(op.operations);
+		   //printDebug("opSigs " + opSigs);
+		}
+		
+		//select(op | op.isKindOf(Source!OperationSig)).asSet();
+		 printDebug("opSigs " + opSigs);
+		//var opSigDeadlineCheck = interfaceOp.operations.select(op | opCalls.includes(op));
+		
+		//var opSigDeadlineCheck2 = interfaceOp.operations.select(op | op.name.matches(op2 | ));
+		ReqVars.name 	= "ReqVars_" 	+ t.name;
+		ReqOps.name 	= "ReqOps_" 	+ t.name;
+			
+		//Introduce the local variables used by the action in the operation
+		// In principle, we could add empty lists.. but here we make sure not to do so.
+	    if (variableList.vars.size > 0) {
+			op.variableList.add(variableList);
+		} else {
+			delete variableList;
+		}
+	
+		if (constantList.vars.size > 0){
+			op.variableList.add(constantList);
+		} else {
+			delete constantList;
+		}
+		
+		
+		
+		// parameter for the deadlineInAction operationDef
+		var parD = new Source!Parameter();
+		var parDtype = new Source!TypeRef();
+		parDtype.ref = Source!PrimitiveType.all.selectOne(p|p.name="int");
+		parD.type = parDtype;
+		parD.name = "d";
+		op.parameters.add(parD);
+		
+		// The operation has an Initial junction, a composite state, and a final state.
+		var opInitial 	= new Source!Initial();
+		opInitial.name	= "i"; // + "_" + (count+1);
+		var opStateS0 	= new Source!State();
+		opStateS0.name 	= "S0";
+		var opFinal 	= new Source!Final();
+		opFinal.name 	= "f"; //+ "_" + (count+1);
+		
+		//Creating the variable g for the new operation
+		var newVar = new Source!Variable();
+		newVar.name = "g_EDFA" + t.name; //+ newState.name;
+		
+		var newVartype = new Source!TypeRef();
+		newVartype.ref = Source!PrimitiveType.all.selectOne(p|p.name="boolean");
+		newVar.type = newVartype;
+        //printDebug("newVar " + newVar);
+		var initialVar = new Source!BooleanExp();
+		initialVar.value = "false";
+		
+		newVar.initial = initialVar;
+
+        // Attributes of op
+		// 1 - Adding the variable g to op
+		var variableList = new Source!VariableList();
+		variableList.vars.add(newVar);
+		variableList.modifier = VariableModifier#VAR;
+		op.variableList.add(variableList); 
+		
+		// 2 - op requires IdeadlineCheck
+		var interface = pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck");
+		// Adding the IdeadlineCheck to op
+		op.rInterfaces.add(interface);
+		
+		// Attributes of the composite state opStateS0
+		var opInitialS0 	= new Source!Initial();
+		opInitialS0.name	= "i";//+ "_" + (count+1);
+		var opStateS1 	= new Source!State();
+		opStateS1.name 	= "S1";
+		var opFinalS0 	= new Source!Final();
+		opFinalS0.name 	= "f";//+ "_" + (count+1);
+		
+		//Creating the during action (during deadlineCheck) for opStateS1
+		var duringAction = new DuringAction();
+		duringAction.action = new Call();
+		
+		var opSigDeadlineCheck = interface.operations.selectOne(op | op.name = "deadlineCheck");
+		
+		duringAction.action.`operation` = opSigDeadlineCheck;
+		//Adding the parameter
+		var par = t.action.deadline;
+		//printDebug("par " + par);
+		
+		var rfD = new Source!RefExp();
+		rfD.ref = parD;
+		duringAction.action.args.add(rfD); 
+		printDebug("duringAction.action.args " + duringAction.action.args);
+		
+		//Adding the action to opStateS1
+		opStateS1.actions.add(duringAction);
+		
+		//Creating the transitions of opStateS0
+		//It has two transitions: from opInitialS0 to opStateS1
+		var t0S0 = new Source!Transition();
+		t0S0.source = opInitialS0;
+		t0S0.target = opStateS1;
+		t0S0.name	  = "t0";
+		
+		
+		//Creating the action of the transition t1S0
+		var seqStatement = new Source!SeqStatement();
+		//Setting the second action of the SeqStatement
+		
+        
+        //t.action = t.action.stmt;
+		
+		var actionSeq1 =  t.action.stmt;//t.action;//t.action.stmt;
+		var contents2 = actionSeq1.closure(x|x.eContents());
+		for (op in opCalls){
+	        //Cloning the operation
+	    	var newOp = ecoreUtil.copy(op); 
+	    	//newOp.name = newOp.name + "EDFA";
+	    	//printDebug("newOp.name " + newOp.name);
+	    	for (opSig in opSigs){
+	    	    //printDebug("opSig.name " + opSig.name);
+	        	if (opSig.name = newOp.`operation`.name){
+	        	    //Cloning the OperationSig because we need to create 
+	        	    //a new interface to be required by the new operation
+	        		printDebug("newOp.name " + opSig.name);
+	        		var newOpSig = ecoreUtil.copy(opSig); 
+	        		ReqOps.operations.add(newOpSig);
+	        		printDebug("ReqOps " + ReqOps);
+	        	}
+	    	}
+	    	// Update all call references to the old call declaration 'op' => newOp.
+			for (opCall in contents2.select(opC:Source!Call|opC = op)) {
+				//opCall = newOp;
+				opCall.`operation` = newOp.`operation`;
+				opCall.args = newOp.args;
+			}
+	    
+	    }
+	    
+	   
+		op.rInterfaces.add(ReqOps);
+		pkg.interfaces.add(ReqOps);
+		
+		
+		//Craeting VarRef g=true
+		var varRef = new Source!VarRef();
+	    varRef.name = newVar;
+		var trueVar = new Source!BooleanExp();
+		trueVar.value = "true";
+		//Setting the second action of the SeqStatement
+		var actionSeq2 = new Source!Assignment();
+		actionSeq2.left = varRef;
+		actionSeq2.right = trueVar;
+		
+		seqStatement.statements.addAll(Sequence{actionSeq1,actionSeq2});
+
+        // It also has a transition from opStateS1 to opfinalS0
+		var t1S0 = new Source!Transition();
+		t1S0.name	= "t1";
+		t1S0.source = opStateS1;
+		t1S0.target = opFinalS0;
+		t1S0.action = seqStatement;
+		// ******************************************************************
+		//t1S0.action = actionSeq1;
+		//t1S0.action = seqStatement; //ERROR (skip<{d1})<{d2}
+		// ERROR t1S0.action = seqStatement;
+        // ******************************************************************
+		//Adding the nodes and transition of opStateS0
+		opStateS0.nodes.addAll(Set{opInitialS0,opStateS1,opFinalS0});
+		opStateS0.transitions.addAll(Set{t0S0,t1S0});
+       
+        
+       
+		
+		// Op has two transitions
+		// from opInitial to opStateS0
+		var t0 = new Source!Transition();
+		t0.source = opInitial;
+		t0.target = opStateS0;
+		t0.name	  = "t0EDFA";
+		
+		// It also has a transition from opStateS0 to opfinal
+		var t1 = new Source!Transition();
+		t1.source = opStateS0;
+		t1.target = opFinal;
+		t1.name	  = "t1EDFA";
+		//Creating RefExp [g]
+		var refExp = new Source!RefExp();
+		refExp.ref = newVar;
+		t1.condition = refExp;
+		printDebug(" t1.condition " + t1.condition);
+		//Adding nodes and transition of op
+		op.nodes.addAll(Set{opInitial,opStateS0,opFinal});
+		op.transitions.addAll(Set{t0,t1});
+		
+		//Creating the call to deadlineInAction
+		var call = new Source!Call();
+		call.`operation` = opSig;
+		call.args.add(par);
+		t.action = call;
+		printDebug(" t.action " + t.action);
+		
+		////////////////////////////////////////////////////////////////////////////////////////////////-	
+		// For each ControllerDef in the set of all controllers 'c' in context (Source!ControllerDef)
+		// for which the 'machines' attribute contains 'stm' or references 'stm', then introduce a
+		// OperationRef element whose 'ref' attribute points to 'op'.
+		for ( c : Source!ControllerDef in pkg.controllers) 
+		{
+			var opRef 	= new Source!OperationRef();
+			opRef.ref 	= op;
+			opRef.name	= c.name + "_ref_" + op.name;
+			c.lOperations.add(opRef);
+			printDebug("Adding reference to operation in controller '" + c.name + "'");
+		}
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+		// Declare an interface that contains the new operation		
+		var opInterface = new Source!Interface();
+		opInterface.name = "I_" + op.name;
+		
+		// parameter for the deadlineInAction_ operation sig
+		var parD2 = new Source!Parameter();
+		var parDtype2 = new Source!TypeRef();
+		parDtype2.ref = Source!PrimitiveType.all.selectOne(p|p.name="int");
+		parD2.type = parDtype2;
+		parD2.name = "d";
+		opSig.parameters.add(parD2);
+		opInterface.operations.add(opSig);
+		
+		// Add interface to current package.
+		pkg.interfaces.add(opInterface);
+		
+		// Make this interface required by opDef.
+		opDef.rInterfaces.add(opInterface);
+		
+		// Make IdeadlineCheck required by stm.
+		opDef.rInterfaces.add(pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck"));
+		//MSCF - the machine that calls the current operation must requires the current operation and IdeadlineCheck
+		//stm.rInterfaces.add(pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck"));
+		//search machine that requires the current operation
+		printDebug("searchMachine");
+		searchMachine(opDef,opInterface);
+		
+		
+		// Adding OperationDef to current package.
+		pkg.operations.add(op);
+		
+		if (debug)
+		{
+			//printDebug("IntroduceSimpleOperation");
+			//for (ts in op.transitions) {
+				//printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ")");
+			  printDebug("Exit Eliminate Deadline From Action");
+			//}
+		}
+	}
+	
+}
+*/
+
+//New version
+// Complex rule to eliminate deadline expressions in an operation
+pattern EliminateDeadlineFromActionInOperation
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	opDef : Source!OperationDef 
+	    from: pkg.operations,     
+	t 	: Source!Transition from: opDef.transitions
+	{
+		// One of the transitions with deadline	
+	match:  not(t.action = null) and t.action.isKindOf(Source!TimedStatement) 
+            and not (opDef.name = "deadlineCheck")
+	do {
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		count=count+1;
+		printDebug("Eliminate Deadline From Action In Operation - New version"); 
+		
+		printDebug("transition.name " + t.name + " opDef.name " + opDef.name + " t.action "  + t.action);
+		
+	    // Create the new operation, and a new signature for inclusion in the interface.
+		var op 		= new Source!OperationDef();
+		op.name 	= "deadlineAction_" + opDef.name;
+		
+		var opSig 	= new Source!OperationSig();
+		opSig.name 	= "deadlineAction_" + opDef.name;
+		
+		// parameter for the deadlineInAction operationSig - opSig
+		var parD2 = new Source!Parameter();
+		var parDtype2 = new Source!TypeRef();
+		parDtype2.ref = Source!PrimitiveType.all.selectOne(p|p.name="nat");
+		parD2.type = parDtype2;
+		parD2.name = "d";
+		opSig.parameters.add(parD2);
+		
+        // parameter for the deadlineInAction operationDef - op
+		var parD = new Source!Parameter();
+		var parDtype = new Source!TypeRef();
+		parDtype.ref = Source!PrimitiveType.all.selectOne(p|p.name="nat");
+		parD.type = parDtype;
+		parD.name = "d";
+		op.parameters.add(parD);
+		
+		// The operation has an initial junction, a composite state, and a final state.
+		var opInitial 	= new Source!Initial();
+		opInitial.name	= "i"; // + "_" + (count+1);
+		var opStateS0 	= new Source!State();
+		opStateS0.name 	= "S0";
+		var opFinal 	= new Source!Final();
+		opFinal.name 	= "f"; //+ "_" + (count+1);
+		
+		//Creating the variable g for the new operation
+		var newVar = new Source!Variable();
+		newVar.name = "g"; 
+		
+		var newVartype = new Source!TypeRef();
+		newVartype.ref = Source!PrimitiveType.all.selectOne(p|p.name="boolean");
+		newVar.type = newVartype;
+
+		var initialVar = new Source!BooleanExp();
+		initialVar.value = "false";	
+		newVar.initial = initialVar;
+
+        // Attributes of op
+		// 1 - Adding the variable g to op
+		var variableList = new Source!VariableList();
+		variableList.vars.add(newVar);
+		variableList.modifier = VariableModifier#VAR;
+		op.variableList.add(variableList); 
+		
+		// 2 - op requires IdeadlineCheck
+		//IdeadlineCheck
+		/*For generality: 
+         here, we need to update: we need to create a rct with the deadline operations (and interfaces),
+         as well as wait operations (and their interfaces):
+		 So, to get the interface IdeadlineCheck, we need to acess such a file, and
+         var interface = pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck"); 
+
+        
+		for (i in pkg.interfaces){
+		 //printDebug("i in pkg.interfaces " + i.name);
+		  if (i.name.equals("IdeadlineCheck")){
+		   // printDebug("interface " + i.name);
+		  }
+		  
+		}*/
+		var interface = pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck");
+		
+		// Adding the IdeadlineCheck to op
+		if (interface == null){
+			printDebug("IdeadlineCheck is null");
+		}
+		else printDebug(op.name + " is not null");
+		op.rInterfaces.add(interface);
+		
+		// Attributes of the composite state opStateS0
+		var opInitialS0 	= new Source!Initial();
+		opInitialS0.name	= "i";
+		var opStateS1 	= new Source!State();
+		opStateS1.name 	= "S1";
+		var opFinalS0 	= new Source!Final();
+		opFinalS0.name 	= "f";
+		
+		//Creating the during action (during deadlineCheck) for opStateS0
+		var duringAction = new DuringAction();
+		duringAction.action = new Call();
+		
+		var opSigDeadlineCheck = interface.operations.selectOne(op | op.name = "deadlineCheck");
+		
+		duringAction.action.`operation` = opSigDeadlineCheck;
+		
+		var rfD2 = new Source!RefExp();
+		rfD2.ref = parD;
+		duringAction.action.args.add(rfD2);  
+		
+		//Adding the action to opStateS0
+		opStateS0.actions.add(duringAction);
+		
+		//Creating the transitions of the composite state S0
+		//It has two transitions: from opInitialS0 to opStateS1
+		var t0S0 = new Source!Transition();
+		t0S0.name	  = "t0";
+		t0S0.source = opInitialS0;
+		t0S0.target = opStateS1;
+		
+		// It also has a transition from opStateS1 to opfinalS0
+		var t1S0 = new Source!Transition();
+		t1S0.name	= "t1";
+		t1S0.source = opStateS1;
+		t1S0.target = opFinalS0;
+		
+		//Creating the action of the transition t1S0, which is a Call (action operation)
+		//First, we create the action operation
+		var opActOp 	= new Source!OperationDef();
+		opActOp.name 	= "normal_" + op.name;
+		
+		var opSigActOp  = new Source!OperationSig();
+		opSigActOp.name = "normal_" + op.name;
+		
+		//This new operation (normal_deadlineAction_) contains two nodes (it is an action operation)
+		//Nodes of the action operation normal_deadlineAction_
+		var opActOpInitial 	= new Source!Initial();
+		opActOpInitial.name	= "i";
+		var opActOpFinal 	= new Source!Final();
+		opActOpFinal.name 	= "f";
+		
+		//The single transition of the action operation normal_deadlineAction_
+		var tActOp = new Source!Transition();
+		tActOp.name	  = "t";
+		tActOp.source = opActOpInitial;
+		tActOp.target = opActOpFinal;
+		
+		//Creating the action of such a transition; it is a SeqStatement
+		var seqStatementActOp = new Source!SeqStatement();
+		var seq1 =  t.action.stmt;
+		
+		//Craeting VarRef g=true
+		//First, we make a copy of g
+		var gActOp = ecoreUtil.copy(newVar);
+		var varRefActOp = new Source!VarRef();
+	    varRefActOp.name = gActOp;
+		var trueVarActOp = new Source!BooleanExp();
+		trueVarActOp.value = "true";
+		//Setting the second action of the SeqStatement
+		var assignmentActOp = new Source!Assignment();
+		assignmentActOp.left = varRefActOp;
+		assignmentActOp.right = trueVarActOp;
+		
+		seqStatementActOp.statements.addAll(Sequence{seq1,assignmentActOp});
+		
+		tActOp.action = seqStatementActOp; //t.action.stmt; //Its action is the original action of opDef (stmt)
+		
+		//Adding nodes of opActOp
+		opActOp.nodes.addAll(Set{opActOpInitial,opActOpFinal});
+		//Adding the single transition of opActOp
+		opActOp.transitions.add(tActOp);
+		
+		//We now create the interface for such an operation
+		
+		
+		//Creating the call to opActOp (normal_deadlineAction_)
+		var callActOp = new Source!Call();
+		callActOp.`operation` = opSigActOp;
+		t1S0.action = callActOp;
+		
+		/*
+		
+        */
+
+		//Adding the nodes and transition of opStateS0
+		opStateS0.nodes.addAll(Set{opInitialS0,opStateS1,opFinalS0});
+		opStateS0.transitions.addAll(Set{t0S0,t1S0});
+		
+		//Now, we create the transitions of the main operation deadlineCheck
+		// Op has two transitions
+		// (1) - from opInitial to opStateS0
+		var t0 = new Source!Transition();
+		t0.name	  = "t0";
+		t0.source = opInitial;
+		t0.target = opStateS0;	
+		
+		// (2) - from opStateS0 to opfinal
+		var t1 = new Source!Transition();
+		t1.name	  = "t1";
+		t1.source = opStateS0;
+		t1.target = opFinal;
+			
+		//Creating RefExp [g]
+		var refExp = new Source!RefExp();
+		refExp.ref = newVar;
+		t1.condition = refExp;
+		
+		//Adding nodes and transition of op
+		op.nodes.addAll(Set{opInitial,opStateS0,opFinal});
+		op.transitions.addAll(Set{t0,t1});
+        ////////////////////////////////////////////////////////////////////////////////////////////////
+		// Create two interfaces to hold new declarations for variables/operations/events/clocks
+		// used by this action.
+        var Req 	= new Source!Interface();
+        Req.name 	= "req_" + op.name;
+
+		var DefEvents	= new Source!Interface();
+		DefEvents.name 	= "defEvents_" 	+ op.name;
+		
+		// Create two interfaces to hold new declarations for variables/operations/events/clocks used by this action.
+        var ReqActOp 	= new Source!Interface();
+        ReqActOp.name 	= "req_" + opActOp.name;
+        //Adding g into ReqActOp
+        var variableListActOp = new Source!VariableList();
+		variableListActOp.vars.add(gActOp);
+		variableListActOp.modifier = VariableModifier#VAR;
+        ReqActOp.variableList.add(variableListActOp);
+		
+		var DefEventsActOp	= new Source!Interface();
+		DefEventsActOp.name = "defEvents_" 	+ opActOp.name;
+	   
+		printDebug("t.action.stmt " + t.action.stmt);
+		usedVars(Req,seq1);//seq1);//t.action.stmt); 
+	    usedVars(ReqActOp,seq1);
+		//replaceUsedOps(Req,t.action);
+		usedOps(ReqActOp,seq1);//t.action.stmt);
+				
+		//replaceClocks(Req, t.action);	//Ok
+		usedClocks(Req,seq1);//t.action.stmt);
+		usedClocks(ReqActOp,seq1);
+		
+		//replaceUsedEvents(DefEvents,t.action);
+		usedEvents(DefEvents,seq1);//t.action.stmt);
+		usedEvents(DefEventsActOp,seq1);
+		
+		
+		//Creating the call to the new operation deadllineAction_
+		var call = new Source!Call();
+		call.`operation` = opSig;
+		//Adding the parameter
+		call.args.add(t.action.deadline);
+		
+		t.action = call;
+		
+		
+		//Adding the required interfaces into op and opActOp
+		for (r in reqIOps){
+		   op.rInterfaces.add(r);
+		   opActOp.rInterfaces.add(r);
+		}
+		reqIOps = new Set(Source!Interface);
+	
+		//printDebug(" defEvIOps " + defEvIOps);
+		for (i in defEvIOps){
+		  op.interfaces.add(i);
+		  opActOp.interfaces.add(i);
+		}
+		
+		
+		//printDebug(" defEvOps " + defEvOps);
+		
+		if (defEvOps.size()>0){
+		//Creating new interface for events declared outside interfaces
+		var defLocalEvOps =  new Source!Interface();
+		defLocalEvOps.name 	= "defLocalEvOps_" + op.name;// + "_" +  t.source.name + "_" + t.name;
+		var defLocalEvActOp  = new Source!Interface();
+		defLocalEvActOp.name = "defLocalEvOps_" + opActOp.name;// + "_" +  t.source.name + "_" + t.name;
+			for (ev in defEvOps){
+		     defLocalEvOps.events.add(ev);
+		     defLocalEvActOp.events.add(ev);
+		   }
+		   pkg.interfaces.addAll(Set{defLocalEvOps,defLocalEvActOp}); 
+		   op.interfaces.add(defLocalEvOps);
+		   opActOp.interfaces.add(defLocalEvActOp);
+		}
+		
+		if (not mapEventsInterface.isEmpty()){
+		//We need to create projections of the interfaces 
+		//in mapEventsInterface with only the events
+		  for (i in mapEventsInterface.keySet()){
+		        //Creating a new interface
+		        var newInterface = new Source!Interface();
+		        newInterface.name = i.name + "_events_" + op.name;// + "_" +  t.source.name + "_" + t.name;
+		        newInterface.events.addAll(mapEventsInterface.get(i));
+		        //printDebug(" newInterface.events.addAll") + newInterface.events;
+		        var newInterfaceActOp = new Source!Interface();
+		        newInterfaceActOp.name = i.name + "_events_" + opActOp.name;// + "_" +  t.source.name + "_" + t.name;
+		        newInterfaceActOp.events.addAll(mapEventsInterface.get(i));
+		        
+		        op.interfaces.add(newInterface);
+		        opActOp.interfaces.add(newInterfaceActOp);
+		        pkg.interfaces.addAll(Set{newInterface,newInterfaceActOp}); 
+		  }
+		
+		}
+		
+		defEvIOps = new Set(Source!Interface);
+		defEvOps = new Set(Source!Event);
+		mapEventsInterface = new Map(Source!Interface,Set(Source!Event));
+		defEvIOpsActOp = new Set(Source!Interface);
+		defEvOpsActOp = new Set(Source!Event);
+		//mapEventsInterfaceActOp = new Map(Source!Interface,Set(Source!Event));
+		
+		if (Req.operations.size == 0 and Req.variableList.size == 0 and Req.clocks.size == 0) 	
+		   { delete Req; 	}
+		else { pkg.interfaces.add(Req); op.rInterfaces.add(Req); }
+		//ReqActOp is never empty: it contains at least the variable g
+		pkg.interfaces.add(ReqActOp); opActOp.rInterfaces.add(ReqActOp);		
+	    if (DefEvents.events.size == 0)		
+	       { delete DefEvents;	} 
+	    else { pkg.interfaces.add(DefEvents); op.interfaces.add(DefEvents); 
+	           pkg.interfaces.add(DefEventsActOp); opActOp.interfaces.add(DefEventsActOp); }
+	    		
+        printDebug("Added interfaces to package '" + pkg.name + "' and operation '" + op.name + "'");	
+			
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+		// Declare an interface that contains the new operation	deadlineAction
+		var opInterface = new Source!Interface();
+		opInterface.name = "I_" + op.name;
+		opInterface.operations.add(opSig);
+		
+		// Declare an interface that contains the new operation	normal_deadlineAction
+		var opInterfaceActOp = new Source!Interface();
+		opInterfaceActOp.name = "I_" + opActOp.name;
+		opInterfaceActOp.operations.add(opSigActOp);
+		
+		// Add the interfaces to current package.
+		pkg.interfaces.addAll(Set{opInterface,opInterfaceActOp});
+		
+		// Make opInterface required by the original operation opDef.
+		opDef.rInterfaces.add(opInterface);
+		
+		// Make opInterfaceActOp required by the new operation op (deadlineAction_).
+		op.rInterfaces.add(opInterfaceActOp);
+		
+		////////////////////////////////////
+		///Not required in the comp semantics
+		////////////////////////////////////
+		// Make IdeadlineCheck required by opDef.
+		//opDef.rInterfaces.add(pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck"));
+		//MSCF - the state machine (or operation) that calls the current operation 
+		//must requires the current operation and IdeadlineCheck
+		//stm.rInterfaces.add(pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck"));
+		//searchMachine(pkg,opDef,opInterface); This is no more required
+		//searchOperation(opDef,opInterface);
+		
+		
+		
+		// Adding the OperationDefs to current package.
+		pkg.operations.addAll(Set{op,opActOp});
+		
+		////////////////////////////////////////////////////////////////////////////////////////////////-	
+		// For each ControllerDef in the set of all controllers 'c' in context (Source!ControllerDef)
+		// for which the 'machines' attribute contains 'stm' or references 'stm', then introduce a
+		// OperationRef element whose 'ref' attribute points to 'op'.
+		for ( c : Source!ControllerDef 
+				in select(c:Source!ControllerDef|c.lOperations.exists(op|getOperation(op)==opDef))) 
+		{
+			var opRef 	= new Source!OperationRef();
+			opRef.ref 	= op;
+			opRef.name	= c.name + "_ref_" + op.name;
+			c.lOperations.add(opRef);
+			var opRefActOp 	= new Source!OperationRef();
+			opRefActOp.ref 	= opActOp;
+			opRefActOp.name	= c.name + "_ref_" + opActOp.name;
+			c.lOperations.add(opRefActOp);
+			printDebug("Adding reference to operation in controller '" + c.name + "'");
+		}
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+	
+		
+		
+		if (debug)
+		{
+			//printDebug("IntroduceSimpleOperation");
+			//for (ts in op.transitions) {
+				//printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ")");
+			  printDebug("Exit Eliminate Deadline From Action in an Operation");
+			//}
+		}
+	}
+	
+}
+
+operation usedOps(i:Interface,a:Statement) {
+
+	// Compute all objects of the metamodel that are contained by transitivity in a.
+	var actionContents = a.closure(x|x.eContents());
+	var contents = actionContents.select(y:Source!Call|true).collect(z:Source!Call|z.`operation`).asSet();
+	
+	//for (xp in UsedVars!ActionUsedOperations.all.select(p|p.a=a)) {
+	for (op in contents){
+		//printDebug("Copying OperationSig: '" + op + "'");
+		//printDebug("Copying OperationSig parameters: '" + op.parameters + "'");
+		var newOpSig = ecoreUtil.copy(op);
+		//printDebug("newOpSig '" + newOpSig + "'");
+		//printDebug("newOpSig.parameters '" + newOpSig.parameters + "'");
+		//printDebug("interface '" + i.name + "'");
+        	
+		for (t in actionContents.select(x:Source!Call|x.`operation` = op)) {
+			t.`operation` = newOpSig;
+		}
+		
+		for (p in newOpSig.parameters){
+		  printDebug("p in newOpSig.parameters '" + p + "'");
+		}
+		
+		//Adding the parameters
+		for (p in op.parameters){ //newOpSig.parameters
+		   var newPar = ecoreUtil.copy(p);
+		   //newOpSig.parameters.add(newPar);
+		}
+		
+		//Adding newOpSig into the Interface
+		i.operations.add(newOpSig);
+		//Missing - parameters 
+		
+				
+		//Colleting the parameters of the operation used by this action
+		/* not required anymore
+		for (p in xp.op.parameters){ //newOpSig.parameters
+		   var newPar = ecoreUtil.copy(p);
+		   listPar.add(newPar);
+		  // listParOpSig.add(p);
+		}
+		
+		for (p in newOpSig.parameters){ // xp.op.parameters
+		     var newPar = ecoreUtil.copy(p);
+		    listParOpSig.add(p);
+		}
+       */
+       
+       var operationDef = select(c:Source!OperationDef|c.name.equals(newOpSig.name));
+        printDebug("operationDef " + operationDef);
+        if (operationDef.size()>0){
+                printDebug("operationDef.size()>0 " + operationDef.size());
+                printDebug("operationDef.get(0) " + operationDef.get(0));
+                //newOp.rInterfaces.addAll();
+        }
+        for (o in operationDef){
+            for (r in o.rInterfaces){
+              reqIOps.add(r);
+           }
+           for (i in o.interfaces){
+               if (i.events.size()>0){
+                  //If an interface has only events,
+                  // we just use this interface
+                  if (i.variableList.size()==0 and i.clocks.size()==0){
+                     defEvIOps.add(i);
+                  }
+                  else {
+                  //Otherwise, we provide projections of these interfaces with only the events
+                  var eventsInt = new Set(Source!Event);
+                    for (ev in i.events){
+                       var newEv = ecoreUtil.copy(ev);
+                       eventsInt.add(newEv);
+                       
+                    }
+                    mapEventsInterface.put(i,eventsInt);
+                  }
+               
+               }  
+           }
+           for (ev in o.events){
+             var newEv = ecoreUtil.copy(ev);
+             defEvOps.add(ev);
+           }
+           
+        }
+		  
+	
+	}
+}
+
+
+pattern EliminateWaitInOperation 
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	opDef : Source!OperationDef from: pkg.operations,     
+	t 	: Source!Transition from: opDef.transitions{
+	match: 	
+	        t.action.isKindOf(Source!Wait) and not(t.action.duration.isKindOf(Source!RangeExp))
+	        and (t.trigger = null or (not (t.trigger = null) and t.trigger._type = TriggerType#EMPTY)) and 
+	         t.deadline = null and t.condition = null 
+	do { 
+		
+	    
+	    printDebug(" ELiminateWaitInOperation ");
+	    
+	    //get the operationsig waitOp
+	    var interface = pkg.interfaces.selectOne(i | i.name = "IwaitOp");
+		var waitOpSig = interface.operations.selectOne(op | op.name = "waitOp");
+		
+	    //create a Call
+	    var callWaitOp = new Source!Call();
+		callWaitOp.`operation` = waitOpSig;
+		//args of the call 
+		callWaitOp.args.add(t.action.duration);
+		
+		t.action = callWaitOp;
+		
+		opDef.rInterfaces.add(interface);
+	    
+	    
+		if (debug) {
+		    printDebug("Exit - Eliminate WaitInOperation"); 
+		
+		}
+	}
+}
+
+pattern EliminateWaitNondeterministicInOperation 
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	opDef : Source!OperationDef from: pkg.operations,     
+	t 	: Source!Transition from: opDef.transitions{
+	match: 	//not (t.source.isKindOf(Source!Initial)) and
+	        t.action.isKindOf(Source!Wait) and t.action.duration.isKindOf(Source!RangeExp) 
+	        and (t.trigger = null or (not (t.trigger = null) and t.trigger._type = TriggerType#EMPTY)) and 
+	         t.deadline = null and t.condition = null 
+	do { 
+		
+	    
+	    printDebug(" Eliminate NondeterministicWait In an Operation ");
+	    
+	    //get the operationsig waitOp
+	    var interface = pkg.interfaces.selectOne(i | i.name = "IwaitInterval");
+		var waitIntervalSig = interface.operations.selectOne(op | op.name = "waitInterval");
+	    
+	    //create a call
+	    var callWaitInterval = new Source!Call();
+		callWaitInterval.`operation` = waitIntervalSig;
+		//create the args
+		var integer1 = new Source!IntegerExp();
+		integer1.value = 1; 
+		callWaitInterval.args.addAll(Sequence{t.action.duration.lrange,t.action.duration.rrange});
+		
+		t.action = callWaitInterval;
+		
+		opDef.rInterfaces.add(interface);
+	    
+	    
+		if (debug) {
+		    printDebug("Exit - RemoveNondeterministicWaitInOperation"); 
+		}
+	}
+}
+
+pattern IntroduceEmptyTransitionForConditionalAsActionInInitialJunction
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	opDef : Source!OperationDef from: pkg.operations,     
+	t 	: Source!Transition from: opDef.transitions{
+	match: 	t.source.isKindOf(Source!Initial) and
+	        (  (t.action.isKindOf(Source!IfStmt)) ) 
+	do { 
+      printDebug("IntroduceEmptyTransitionAndJunctionBeforeConditional ");
+           var newJunction = new Source!Junction();
+	       newJunction.name = t.name + "_initialJunction_";
+		    
+		   var tinitial = new Source!Transition();
+		   tinitial.name = t.name + "_initial_";
+		   tinitial.source = t.source;
+		   tinitial.target = newJunction;
+		   
+		   t.source = newJunction;
+		   opDef.nodes.add(newJunction);
+		   opDef.transitions.add(tinitial);
+    }
+    }
+
+    
+
+//////////////////////////////////////////////////////////////////////////////-
+//////////////////////////////////////////////////////////////////////////////-
+//-Rules to be applied In a Composite State of an Operation
+//////////////////////////////////////////////////////////////////////////////-
+//////////////////////////////////////////////////////////////////////////////-
+
+
+pattern EliminateParStmtInCompositeStateOfOperationDef 
+	 pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	opDef : Source!OperationDef from: pkg.operations,
+	s 	: Source!State	
+		// One of the states of opDef
+		from: opDef.closure(x:Source!NodeContainer|x.nodes.selectByKind(Source!NodeContainer)),		      
+	t 	: Source!Transition  from: s.transitions
+	{
+	match: 	//not (t.action = null) and t.action.isKindOf(Source!ParStmt) 
+	t = s.transitions.selectOne(t1 | t1.isKindOf(Source!Transition) and  
+	                           not (t1.action = null)
+	                           and t1.action.isKindOf(Source!ParStmt) )	       
+	do { 
+		printDebug("EliminateParStmtInOperationDef  ");
+		t.action = t.action.stmt;
+					
+		if (debug) {
+	        printDebug("Eliminate ParStmt In OperationDef ");	
+	        printDebug("Transition '" + t.name + "' from '" + t.source.name +  "' to '" + t.target.name + "' (action: " + t.action + ", trigger: "+ t.trigger +")");
+		
+		}
+	}
+}
+
+
+pattern SplitActionInCompositeStateOfOperation 
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	opDef : Source!OperationDef from: pkg.operations,
+	s 	: Source!State	
+		// One of the states of opDef
+		from: opDef.closure(x:Source!NodeContainer|x.nodes.selectByKind(Source!NodeContainer)),		      
+	t 	: Source!Transition //from: s.transitions//, par: Source!ParStmt
+	{
+	
+	match: 	s.nodes.size() > 0 
+	       //not (t.action = null) and t.action.isKindOf(Source!SeqStatement) 
+		  
+	        //and s.transitions.exists(t1 | not(t1.action = null) and t.action.isKindOf(Source!IfStmt))
+	        and t = s.transitions.selectOne(t1 | not(t1.action = null) and t1.action.isKindOf(Source!SeqStatement) )
+	       
+	
+	do { 
+	
+	printDebug("Split Action In Composite State of an Operation");
+	
+	printDebug("transition.name " + t.name + " t.action " + t.action);
+	printDebug("if t.action.isKindOf(Source!SeqStatement)  ");
+	if (t.action.isKindOf(Source!SeqStatement) ){
+	
+	count = count+1;
+	
+	printDebug("transition.name " + t.name + " t.action " + t.action);
+	printDebug("opDef.name " + opDef.name + " s.name " + s.name);
+		// A new junction is created, and a unique name based on the transition t's
+		// name is given, plus the current size of the sequence. This is just an
+		// example, but in general it may be possible to implement an operation
+		// that walks the model to ensure locally unique names, thus obviating
+		// the need for an explicit decision every time a new element is created.
+	
+	
+		var newJunction = new Source!Junction();
+		printDebug("t.action " + t.action + " opDef.name " + opDef.name);
+		newJunction.name = t.name + "_jSAOP_" + t.action.statements.size() + "_" + (count+1);
+		
+		// A new Transition is created, whose source is t.source, and
+		// whose target is the newState. Name uniqueness also ensured
+		// by combining the name of 't' and the size of the sequence.
+		var newTransition = new Source!Transition();
+		newTransition.name = t.name + "_tSAOP_" + t.action.statements.size() + "_" + (count+1);
+		newTransition.target = t.target;
+		newTransition.source = newJunction;
+		newTransition.action = t.action;
+		
+		t.action = newTransition.action.statements.removeAt(0);
+		
+		if (newTransition.action.statements.size = 1) {
+			newTransition.action = newTransition.action.statements.first();
+		}
+		
+		t.target = newJunction;
+		
+		s.nodes.add(newJunction);
+		s.transitions.add(newTransition);
+		
+		/*
+		if (debug) {
+		  printDebug("Transition '" + t.name + "' from '" + t.source.name +  "' to '" + t.target.name + "' (action: " + t.action + ", trigger: "+ t.trigger +")");
+		printDebug("NewTransition '" + newTransition.name + "' from '" + newTransition.source.name +  "' to '" + newTransition.target.name + "' (action: " + newTransition.action + ", trigger: "+ newTransition.trigger +")");
+	    printDebug("Exit Split ActionsIn CompositeState of an Operation");	
+		}
+       */
+	}
+	}
+}
+
+pattern SplitConditionalInCompositeStateOfOperation 
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	opDef : Source!OperationDef from: pkg.operations,
+	s 	: Source!State	
+		// One of the states of opDef
+		from: opDef.closure(x:Source!NodeContainer|x.nodes.selectByKind(Source!NodeContainer)),		      
+	t 	: Source!Transition //from: s.transitions//, par: Source!ParStmt
+	{
+	match: 	s.nodes.size() > 0  
+	        and t = s.transitions.selectOne(t1 | not(t1.action = null) and t1.action.isKindOf(Source!IfStmt) )
+
+	do { 
+		// Two new junctions are created, and four new transitions are created.  
+		// A unique name based on the transition t's name is adopted.  This is just an
+		// example, but in general it may be possible to implement an operation
+		// that walks the model to ensure locally unique names, thus obviating
+		// the need for an explicit decision every time a new element is created.
+		printDebug("Split conditional in composite state of an Operation");
+		var thenJunction = new Source!Junction();
+		thenJunction.name = t.name + "_thenJ_";
+		var elseJunction = new Source!Junction();
+		elseJunction.name = t.name + "_elseJ_";
+		
+		// Four new Transitions are created, two with source t.source, and
+		// whose target are the thenJunction and elseJunction. Name uniqueness also ensured
+		// by combining the name of 't' with some new strings.
+		var thenTransitionGuard = new Source!Transition();
+		thenTransitionGuard.name = t.name + "_thenTG_";
+		thenTransitionGuard.source = t.source;
+		thenTransitionGuard.target = thenJunction;
+		thenTransitionGuard.condition = ecoreUtil.copy(t.action.expression);
+		// TAKE CARE WITH CONTAINED ATTRIBUTES
+		var thenTransitionAction = new Source!Transition();
+		thenTransitionAction.name = t.name + "_thenTA_";
+		thenTransitionAction.source = thenJunction;
+		thenTransitionAction.target = t.target;
+		thenTransitionAction.action = t.action.then;
+		//
+		var elseTransitionGuard = new Source!Transition();
+		elseTransitionGuard.name = t.name + "_elseTG_";
+		elseTransitionGuard.source = t.source;
+		elseTransitionGuard.target = elseJunction;
+		elseTransitionGuard.condition = new Not(); // or new new OpenSTM!Not() ???
+		elseTransitionGuard.condition.exp = t.action.expression;
+		//
+		var elseTransitionAction = new Source!Transition();
+		elseTransitionAction.name = t.name + "_elseTA_";
+		elseTransitionAction.source = elseJunction;
+		elseTransitionAction.target = t.target;
+		elseTransitionAction.action = t.action.`else`; 
+
+// Missing: add new junctions and transitions, remove t, check containement attributes
+		s.transitions.addAll(Set{thenTransitionGuard,thenTransitionAction,elseTransitionGuard,elseTransitionAction});
+		s.transitions.remove(t);
+		delete(t);
+		s.nodes.addAll(Set{thenJunction,elseJunction});
+		
+		/*
+		if (debug) {
+		    
+		    printDebug("Transition '" + t.name + "' from '" + t.source.name +  "' to '" + t.target.name + "' (action: " + t.action + ", trigger: "+ t.trigger +")");
+		    printDebug("Exit Split conditional in composite state of an Operation");
+		}*/
+	}
+}
+
+
+
+
+
+pattern EliminateNondeterministicWaitInCompositeStateOfOperation 
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	opDef : Source!OperationDef from: pkg.operations,
+	s 	: Source!State	
+		// One of the states of opDef
+		from: opDef.closure(x:Source!NodeContainer|x.nodes.selectByKind(Source!NodeContainer)),		      
+	t 	: Source!Transition from: s.transitions//, par: Source!ParStmt
+	{
+	       
+	match:  s.nodes.size() > 0 
+	        and t = s.transitions.selectOne(t1 | t1.action.isKindOf(Source!Wait) and t1.action.duration.isKindOf(Source!RangeExp)) 
+	               
+	do { 
+		// Only the action is modified: a nondeterministic wait is replaced with an ordinary one
+		printDebug("EliminateNondeterministicWait in Composite State of Operation");
+		
+		 //get the operationsig waitOp
+	    var interface = pkg.interfaces.selectOne(i | i.name = "IwaitInterval");
+		var waitIntervalSig = interface.operations.selectOne(op | op.name = "waitInterval");
+	    
+	    //create a call
+	    var callWaitInterval = new Source!Call();
+		callWaitInterval.`operation` = waitIntervalSig;
+		//adding the args 
+		callWaitInterval.args.addAll(Sequence{t.action.duration.lrange,t.action.duration.rrange});
+		
+		t.action = callWaitInterval;
+		
+		opDef.rInterfaces.add(interface);
+		
+		if (debug) { 
+		    //printDebug("Transition '" + t.name + "' from '" + t.source.name +  "' to '" + t.target.name + "' (action: " + t.action + ", trigger: "+ t.trigger +")");
+		    printDebug("Exit Eliminate NondeterministicWait in Composite State of Operation");
+		}
+	}
+}
+
+
+// Complex rule to eliminate deadline expressions in a state-machine of a controller.
+pattern EliminateDeadlineFromActionInCompositeStateOfOperation
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	opDef : Source!OperationDef from: pkg.operations,
+	s 	: Source!State	
+		// One of the states of opDef
+		from: opDef.closure(x:Source!NodeContainer|x.nodes.selectByKind(Source!NodeContainer)),		      
+	t 	: Source!Transition from: s.transitions, ss: Source!State
+	{
+	
+	match: s.nodes.size() > 0 and not (opDef.name.startsWith("deadline"))
+	       and t = s.transitions.selectOne(t1 | not(t1.action = null) and t1.action.isKindOf(Source!TimedStatement))	
+		   
+		  
+	
+	do {
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		count=count+1;
+		printDebug("Eliminate Deadline From Action in Composite State of an Operation"); 
+				
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		// Create a interfaces to hold new declarations for variables/operations/events used by this action.
+		var Req 	= new Source!Interface();
+		var DefEvents	= new Source!Interface();
+		
+		Req.name 	= "req_" 	+ opDef.name + "_" + s.name + "_" + t.source.name + "_" + t.name;
+	   
+       
+        var Req 	= new Source!Interface();
+		var DefEvents	= new Source!Interface();
+		
+		Req.name 	= "reqDIA_" + opDef.name + "_" +  t.source.name + "_" + t.name;
+	    DefEvents.name 	= "defEvents_" 	+ opDef.name + "_" +  t.source.name + "_" + t.name;
+		
+		
+		usedVars(Req,t.action.stmt);
+		/*printDebug("Redeclared used variables and constants in an new interface '" 
+					+ ReqVars.name 
+					+ "' and replaced references to these variables in an action.");
+         */		
+		//replaceUsedOps(Req,t.action);
+		usedOps(Req,t.action.stmt);
+		/*printDebug("Redeclared used operations in an new interface '" 
+					+ ReqEvents.name 
+					+ "' and replaced references to these variables in an action.");
+		*/			
+		//replaceClocks(Req, t.action);	
+		usedClocks(Req, t.action.stmt);
+		
+		//replaceUsedEvents(DefEvents,t.action);
+		usedEvents(DefEvents,t.action.stmt);
+		
+		// Create the new operation, and a new signature for inclusion in the interface.
+		var op 		= new Source!OperationDef();
+		var opSig 	= new Source!OperationSig();
+		
+		//opDef.name already has "normal" + "_" + 
+		op.name 	= "deadlineAction_" + opDef.name;
+		// + "_" +  t.source.name + "_" + t.name + "_" + "op";
+		opSig.name 	= "deadlineAction_" + opDef.name;
+		// + "_" +  t.source.name + "_" + t.name + "_" + "op"; 
+		//op.name 	= "deadlineInAction" + "_" + t.name + "_" + opDef.name;
+		//opSig.name 	= "deadlineInAction" + "_" + t.name + "_" + opDef.name; 
+		
+		// parameter for the deadlineInAction operationSig - opSig
+		var parD2 = new Source!Parameter();
+		var parDtype2 = new Source!TypeRef();
+		parDtype2.ref = Source!PrimitiveType.all.selectOne(p|p.name="int");
+		parD2.type = parDtype2;
+		parD2.name = "d";
+		opSig.parameters.add(parD2);
+		
+        // parameter for the deadlineInAction operationDef - op
+		var parD = new Source!Parameter();
+		var parDtype = new Source!TypeRef();
+		parDtype.ref = Source!PrimitiveType.all.selectOne(p|p.name="int");
+		parD.type = parDtype;
+		parD.name = "d";
+		op.parameters.add(parD);
+		
+		// The operation has an initial junction, a composite state, and a final state.
+		var opInitial 	= new Source!Initial();
+		opInitial.name	= "i"; // + "_" + (count+1);
+		var opStateS0 	= new Source!State();
+		opStateS0.name 	= "S0";
+		var opFinal 	= new Source!Final();
+		opFinal.name 	= "f"; //+ "_" + (count+1);
+		
+		//Creating the variable g for the new operation
+		var newVar = new Source!Variable();
+		newVar.name = "g_EDFA" + t.name; //+ newState.name;
+		
+		var newVartype = new Source!TypeRef();
+		newVartype.ref = Source!PrimitiveType.all.selectOne(p|p.name="boolean");
+		newVar.type = newVartype;
+        //printDebug("newVar " + newVar);
+		var initialVar = new Source!BooleanExp();
+		initialVar.value = "false";
+		
+		newVar.initial = initialVar;
+
+        // Attributes of op
+		// 1 - Adding the variable g to op
+		var variableList = new Source!VariableList();
+		variableList.vars.add(newVar);
+		variableList.modifier = VariableModifier#VAR;
+		op.variableList.add(variableList); 
+		
+		// 2 - op requires IdeadlineCheck
+		var interface = pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck");
+		// Adding the IdeadlineCheck to op
+		op.rInterfaces.add(interface);
+		
+		// Attributes of the composite state opStateS0
+		var opInitialS0 	= new Source!Initial();
+		opInitialS0.name	= "i";//+ "_" + (count+1);
+		var opStateS1 	= new Source!State();
+		opStateS1.name 	= "S1";
+		var opFinalS0 	= new Source!Final();
+		opFinalS0.name 	= "f";//+ "_" + (count+1);
+		
+		//Creating the during action (during deadlineCheck) for opStateS0
+		var duringAction = new DuringAction();
+		duringAction.action = new Call();
+		
+		var opSigDeadlineCheck = interface.operations.selectOne(op | op.name = "deadlineCheck");
+		
+		duringAction.action.`operation` = opSigDeadlineCheck;
+		
+		var rfD2 = new Source!RefExp();
+		rfD2.ref = parD;
+		duringAction.action.args.add(rfD2);   
+		
+		//Adding the action to opStateS1
+		//opStateS1.actions.add(duringAction); //No, it is in opStateS0
+		opStateS0.actions.add(duringAction);
+		
+		//Creating the transitions of opStateS0
+		//It has two transitions: from opInitialS0 to opStateS1
+		var t0S0 = new Source!Transition();
+		t0S0.source = opInitialS0;
+		t0S0.target = opStateS1;
+		t0S0.name	  = "t0";
+		
+		//Creating the action of the transition t1S0
+		var seqStatement = new Source!SeqStatement();
+		var actionSeq1 =  t.action.stmt;
+		
+		//Craeting VarRef g=true
+		var varRef = new Source!VarRef();
+	    varRef.name = newVar;
+		var trueVar = new Source!BooleanExp();
+		trueVar.value = "true";
+		//Setting the second action of the SeqStatement
+		var actionSeq2 = new Source!Assignment();
+		actionSeq2.left = varRef;
+		actionSeq2.right = trueVar;
+		
+		seqStatement.statements.addAll(Sequence{actionSeq1,actionSeq2});
+
+        // It also has a transition from opStateS1 to opfinalS0
+		var t1S0 = new Source!Transition();
+		t1S0.name	= "t1";
+		t1S0.source = opStateS1;
+		t1S0.target = opFinalS0;
+		t1S0.action = seqStatement;
+
+		//Adding the nodes and transition of opStateS0
+		opStateS0.nodes.addAll(Set{opInitialS0,opStateS1,opFinalS0});
+		opStateS0.transitions.addAll(Set{t0S0,t1S0});
+		
+		// Op has two transitions
+		// (1) - from opInitial to opStateS0
+		var t0 = new Source!Transition();
+		t0.source = opInitial;
+		t0.target = opStateS0;
+		t0.name	  = "t0EDFA";
+		
+		// (2) - from opStateS0 to opfinal
+		var t1 = new Source!Transition();
+		t1.source = opStateS0;
+		t1.target = opFinal;
+		t1.name	  = "t1EDFA";
+		
+		//Creating RefExp [g]
+		var refExp = new Source!RefExp();
+		refExp.ref = newVar;
+		t1.condition = refExp;
+		//printDebug(" t1.condition " + t1.condition);
+		
+		//Adding nodes and transition of op
+		op.nodes.addAll(Set{opInitial,opStateS0,opFinal});
+		op.transitions.addAll(Set{t0,t1});
+		
+		//Creating the call to deadlineInAction
+		var call = new Source!Call();
+		call.`operation` = opSig;
+		
+		
+		call.args.add(t.action.deadline);
+		t.action = call;
+		printDebug(" t.action " + t.action);
+		
+						
+		
+		//Adding the required interfaces into op
+		for (r in reqIOps){
+		   op.rInterfaces.add(r);
+		}
+
+		reqIOps = new Set(Source!Interface);
+		
+		
+		printDebug(" defEvIOps " + defEvIOps);
+		for (i in defEvIOps){
+		  op.interfaces.add(i);
+		}
+		
+		
+		
+		if (defEvOps.size()>0){
+		//Creating new interface for events declared outside interfaces
+		var defLocalEvOps =  new Source!Interface();
+		defLocalEvOps.name 	= "defLocalEvOps_" + opDef.name + "_" +  t.source.name + "_" + t.name;
+			for (ev in defEvOps){
+		     defLocalEvOps.events.add(ev);
+		   }
+		   pkg.interfaces.add(defLocalEvOps); 
+		   op.interfaces.add(defLocalEvOps);
+		}
+		
+		if (not mapEventsInterface.isEmpty()){
+		//We need to create projections  of the interfaces 
+		//in mapEventsInterface with only the events
+		  for (i in mapEventsInterface.keySet()){
+		        //Creating a new interface
+		        var newInterface = new Source!Interface();
+		        newInterface.name = i.name + "_events_" + opDef.name + "_" +  t.source.name + "_" + t.name;
+		        newInterface.events.addAll(mapEventsInterface.get(i));
+		        printDebug(" newInterface.events.addAll") + newInterface.events;
+		        
+		        op.interfaces.add(newInterface);
+		        pkg.interfaces.add(newInterface);
+		        
+		  
+		  }
+		
+		}
+		
+		defEvIOps = new Set(Source!Interface);
+		defEvOps = new Set(Source!Event);
+		mapEventsInterface = new Map(Source!Interface,Set(Source!Event));
+		
+		if (Req.operations.size == 0 and Req.variableList.size == 0 and Req.clocks.size == 0) 	
+		   { delete Req; 	}
+		else { pkg.interfaces.add(Req); op.rInterfaces.add(Req); }
+	    if (DefEvents.events.size == 0)		{ delete DefEvents;	} else { pkg.interfaces.add(DefEvents); op.interfaces.add(DefEvents); }
+	    		
+		
+        printDebug("Added interfaces to package '" + pkg.name + "' and operation '" + op.name + "'");	
+			
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+		// Declare an interface that contains the new operation		
+		var opInterface = new Source!Interface();
+		opInterface.name = "I_" + op.name;
+		opInterface.operations.add(opSig);
+		
+		// Add interface to current package.
+		pkg.interfaces.add(opInterface);
+		
+		// Make this interface required by opDef.
+		opDef.rInterfaces.add(opInterface);
+			
+		// Adding OperationDef to current package.
+		pkg.operations.add(op);
+		
+		////////////////////////////////////////////////////////////////////////////////////////////////-	
+		// For each ControllerDef in the set of all controllers 'c' in context (Source!ControllerDef)
+		// for which the 'machines' attribute contains 'stm' or references 'stm', then introduce a
+		// OperationRef element whose 'ref' attribute points to 'op'.
+		for ( c : Source!ControllerDef 
+				in select(c:Source!ControllerDef|c.lOperations.exists(op|getOperation(op)==opDef))) 
+		{
+			var opRef 	= new Source!OperationRef();
+			opRef.ref 	= op;
+			opRef.name	= c.name + "_ref_" + op.name;
+			c.lOperations.add(opRef);
+			printDebug("Adding reference to operation in controller '" + c.name + "'");
+		}
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+			
+		if (debug)
+		{
+			  printDebug("Exit Eliminate Deadline From Action");
+			
+		}
+		
+		
+	}
+	
+}
+
+
+////////////////////////////////////////////////////////////////////
+/*
+// Complex rule to replace actions in transitions of a state-machine of a controller.
+//Action_in_Transition_of_Operation_to_Operation_in_StateMachineDef
+pattern ReplaceStatementsInTransitionsOfOperationByOperations
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	opDef : Source!OperationDef from: pkg.operations,     
+	t 	: Source!Transition from: opDef.transitions
+	{
+	// When the transition has a simple statement
+	match: not(t.action = null) and
+	       ( (t.action.isTypeOf(Source!Skip)) or (t.action.isTypeOf(Source!SendEvent))
+	        or (t.action.isTypeOf(Source!Assignment)) or (t.action.isTypeOf(Source!ClockReset)) 
+	        or (t.action.isTypeOf(Source!Wait) and t.action.duration.isKindOf(Source!IntegerExp)))
+	     and  not(t.action.isTypeOf(Source!Call))  
+	//     and not(t.action.isTypeOf(Source!SeqStatement))
+	       and opDef.transitions.size() > 1
+	do {
+		countCRef = countCRef + 1;
+		printDebug("Begin - Action_in_Transition_of_Operation_to_Operation_in_StateMachineDef" );
+		printDebug("opDef.name " + opDef.name + " t.name " + t.name + " t.action " + t.action );
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		// Create a interfaces to hold new declarations for variables/operations/events used by this t.action.
+		var ReqVars 	= new Source!Interface();
+		var ReqOps 		= new Source!Interface();
+		var ReqEvents	= new Source!Interface();
+		
+		ReqVars.name 	= "ReqVars_" 	+ opDef.name + "_" + t.name;// + "_" + actionName(a);
+		ReqOps.name 	= "ReqOps_" 	+ opDef.name + "_" + t.name;// + "_" + actionName(a);
+		ReqEvents.name 	= "ReqEvents_" 	+ opDef.name + "_" + t.name;// + "_" + actionName(a);
+		
+		replaceUsedVariables(ReqVars,t.action);
+		printDebug("Redeclared used variables and constants in an new interface '" 
+					+ ReqVars.name 
+					+ "' and replaced references to these variables in an action.");		
+		
+		replaceUsedEvents(ReqEvents,t.action);
+		printDebug("Redeclared used events in an new interface '" 
+					+ ReqEvents.name 
+					+ "' and replaced references to these variables in an action.");
+		
+		//replaceUsedOps(ReqOps,t.action); //TO DO
+		printDebug("Redeclared used operations in an new interface '" 
+					+ ReqEvents.name 
+					+ "' and replaced references to these variables in an action.");
+				
+		////////////////////////////////////////////////////////////////////////////////////////////////-		
+		// Create the new operation, and a new signature for inclusion in the interface.
+		var op 		= new Source!OperationDef();
+		var opSig 	= new Source!OperationSig();
+		
+		op.name 	= opDef.name + "_" + t.name + "_op";// + actionName(a) + "_op";
+		opSig.name 	= opDef.name + "_" + t.name + "_op";// + actionName(a) + "_op";
+		
+		// The operation has an Initial junction, a junction, and a Final state.
+		var opInitial 	= new Source!Initial();
+		opInitial.name	= "i";
+		var junction 	= new Source!Junction();
+		junction.name 	= "j";
+		var opFinal 	= new Source!Final();
+		opFinal.name 	= "f";
+		
+		// It has two transitions; from opInitial to junction, and from junction to opFinal
+		var transition = new Source!Transition();
+		transition.name	  = "t1";
+		transition.source = opInitial;
+		transition.target = junction;
+		//transition.action = t.action;
+		
+		var transitiont2 = new Source!Transition();
+		transitiont2.name	  = "t2";
+		transitiont2.source = junction;
+		transitiont2.target = opFinal;
+		transitiont2.action = t.action;
+		
+				
+		// Add the above opInitial and opFinal to the sequence of nodes,
+		// and the new transition to the sequence of transitions. 
+		op.nodes.addAll(Sequence{opInitial,junction,opFinal});
+		op.transitions.addAll(Sequence{transition,transitiont2});
+		
+		// Auxiliary annotations. TODO: Review whether they are still necessary.
+		//op.~originaction = a;
+		//op.~originstate = s;
+		
+		// Add OperationDef to current package.
+		pkg.operations.add(op);
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+		
+		// Delete interfaces if they are empty as the result of the operations
+		// above, otherwise introduce them in the package, and make them required by
+		// the new operation.
+		if (ReqOps.operations.size == 0) 	{ delete ReqOps; 	} else { pkg.interfaces.add(ReqOps); op.rInterfaces.add(ReqOps); }
+		if (ReqEvents.events.size == 0)		{ delete ReqEvents;	} else { pkg.interfaces.add(ReqEvents); op.interfaces.add(ReqEvents); }
+		if (ReqVars.variableList.size == 0) { delete ReqVars; 	} else { pkg.interfaces.add(ReqVars); op.rInterfaces.add(ReqVars); }
+			
+		printDebug("Added interfaces to package '" + pkg.name + "' and operation '" + op.name + "'");	
+		////////////////////////////////////////////////////////////////////////////////////////////////-	
+		// For each ControllerDef in the set of all controllers 'c' in context (Source!ControllerDef)
+		// for which the 'machines' attribute contains 'stm' or references 'stm', then introduce a
+		// OperationRef element whose 'ref' attribute points to 'op'.
+		for ( c in Source!ControllerDef )
+				//in select(c:Source!ControllerDef|c.machines.exists(s|getStateMachine(s)==stm))) 
+		{
+			var opRef 	= new Source!OperationRef();
+			opRef.ref 	= op;
+			opRef.name	= c.name + "_ref" + countCRef + "_" + op.name;
+			c.lOperations.add(opRef);
+			printDebug("Adding reference to operation in controller '" + c.name + "'");
+		  //  for (cr in c.lOperations){
+		  //      printDebug("cr.ref " + cr.ref);
+		  //  }
+		
+		}
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+		// Declare an interface that contains the new operation		
+		var opInterface = new Source!Interface();
+		opInterface.name = "I_" + op.name;
+		opInterface.operations.add(opSig);
+		
+		// Add interface to current package.
+		pkg.interfaces.add(opInterface);
+		
+		// Make this interface required by stm.
+		//stm.rInterfaces.add(opInterface);
+		opDef.rInterfaces.add(opInterface);
+		
+		// Introduce a Call to the newly defined operation.
+		var opCall = new Source!Call();
+		// Replace the statement in action 'a' by a call to the operation signature opSig.
+		//
+		// Note that from the point of view of the call in the state-machine it only knows
+		// about the interface opInterface, and not about where the operation is
+		// actually defined, so the call is in terms of this OperationSig.
+		
+		opCall.`operation` = opSig;
+		t.action = opCall;
+		
+		searchSTMRequiresOp(opDef,opInterface);
+		
+		if (debug)
+		{
+			printDebug("End - Action_in_Transition_of_Operation_to_Operation_in_StateMachineDef");
+			printDebug("New operation '" + op.name + " Parent operation " + opDef.name + "' (action: " + t.action + ")");
+			
+			//for (ts in op.transitions) {
+			//	printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ")");
+			//}
+		}
+	}
+}
+*/
+
+
+// I think this is no longer necessary MSCF 16/11
+// The following rule is replaced by ReplaceActionsInTransitionsOfAnOperationByOperations
+// Complex rule to replace actions in transitions of a state-machine of a controller.
+/*
+pattern ReplaceStatementsInTransitionsOfCompositeStateOfOperationByOperations
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	opDef : Source!OperationDef from: pkg.operations,
+	s 	: Source!State	
+		// One of the states of opDef
+		from: opDef.closure(x:Source!NodeContainer|x.nodes),		      
+	t 	: Source!Transition //from: s.transitions
+	{
+	// When the action is neither an operation call nor SeqStatement
+	match: s.nodes.size() > 0 
+	       and t = s.transitions.selectOne(t1 | not(t1.action = null) 
+	                                    and ( (t1.action.isTypeOf(Source!Skip)) 
+	                                         or (t1.action.isTypeOf(Source!SendEvent))
+	                                         or (t1.action.isTypeOf(Source!Assignment)) 
+	                                         or (t1.action.isTypeOf(Source!ClockReset)) 
+	                                         or (t1.action.isTypeOf(Source!Wait) 
+	                                              //and t1.action.duration.isKindOf(Source!IntegerExp)
+	                                              )
+	                                              ))
+	do {
+		countCRef = countCRef +1;
+		printDebug("Begin - Replace Statements In Transitions Of CompositeState Of Operation By Operations" );
+		printDebug("opDef.name " + opDef.name + " s.name " + s.name + " t.action " + t.action );
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		// Create a interfaces to hold new declarations for variables/operations/events used by this t.action.
+		var ReqVars 	= new Source!Interface();
+		var ReqOps 		= new Source!Interface();
+		var ReqEvents	= new Source!Interface();
+		
+		ReqVars.name 	= "ReqVars_" 	+ opDef.name + "_" + t.name;// + "_" + actionName(a);
+		ReqOps.name 	= "ReqOps_" 	+ opDef.name + "_" + t.name;// + "_" + actionName(a);
+		ReqEvents.name 	= "ReqEvents_" 	+ opDef.name + "_" + t.name;// + "_" + actionName(a);
+		
+		replaceUsedVariables(ReqVars,t.action);
+		printDebug("Redeclared used variables and constants in an new interface '" 
+					+ ReqVars.name 
+					+ "' and replaced references to these variables in an action.");		
+		
+		replaceUsedEvents(ReqEvents,t.action);
+		printDebug("Redeclared used events in an new interface '" 
+					+ ReqEvents.name 
+					+ "' and replaced references to these variables in an action.");
+		
+		//replaceUsedOps(ReqOps,t.action); //TO DO
+		printDebug("Redeclared used operations in an new interface '" 
+					+ ReqEvents.name 
+					+ "' and replaced references to these variables in an action.");
+				
+		////////////////////////////////////////////////////////////////////////////////////////////////-		
+		// Create the new operation, and a new signature for inclusion in the interface.
+		var op 		= new Source!OperationDef();
+		var opSig 	= new Source!OperationSig();
+		
+		op.name 	= opDef.name + "_" + t.name + "_op";// + actionName(a) + "_op";
+		opSig.name 	= opDef.name + "_" + t.name + "_op";// + actionName(a) + "_op";
+		
+		// The operation has an Initial junction, a junction, and a Final state.
+		var opInitial 	= new Source!Initial();
+		opInitial.name	= "i";
+		//var junction 	= new Source!Junction();
+		//junction.name 	= "j";
+		var opFinal 	= new Source!Final();
+		opFinal.name 	= "f";
+		
+		// It has two transitions; from opInitial to junction, and from junction to opFinal
+		var transition = new Source!Transition();
+		transition.name	  = "t1";
+		transition.source = opInitial;
+		transition.target = opFinal;
+		transition.action = t.action;
+		
+				
+		// Add the above opInitial and opFinal to the sequence of nodes,
+		// and the new transition to the sequence of transitions. 
+		op.nodes.addAll(Sequence{opInitial,opFinal});
+		op.transitions.addAll(Sequence{transition});
+		
+		// Auxiliary annotations. TODO: Review whether they are still necessary.
+		//op.~originaction = a;
+		//op.~originstate = s;
+		
+		// Add OperationDef to current package.
+		pkg.operations.add(op);
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+		
+		// Delete interfaces if they are empty as the result of the operations
+		// above, otherwise introduce them in the package, and make them required by
+		// the new operation.
+		if (ReqOps.operations.size == 0) 	{ delete ReqOps; 	} else { pkg.interfaces.add(ReqOps); op.rInterfaces.add(ReqOps); }
+		if (ReqEvents.events.size == 0)		{ delete ReqEvents;	} else { pkg.interfaces.add(ReqEvents); op.interfaces.add(ReqEvents); }
+		if (ReqVars.variableList.size == 0) { delete ReqVars; 	} else { pkg.interfaces.add(ReqVars); op.rInterfaces.add(ReqVars); }
+			
+		printDebug("Added interfaces to package '" + pkg.name + "' and operation '" + op.name + "'");	
+		////////////////////////////////////////////////////////////////////////////////////////////////-	
+		// For each ControllerDef in the set of all controllers 'c' in context (Source!ControllerDef)
+		// for which the 'machines' attribute contains 'stm' or references 'stm', then introduce a
+		// OperationRef element whose 'ref' attribute points to 'op'.
+		for ( c in Source!ControllerDef )
+				//in select(c:Source!ControllerDef|c.machines.exists(s|getStateMachine(s)==stm))) 
+		{
+			var opRef 	= new Source!OperationRef();
+			opRef.ref 	= op;
+			opRef.name	= c.name + "_ref" + countCRef + "_" + op.name;
+			c.lOperations.add(opRef);
+			printDebug("Adding reference to operation in controller '" + c.name + "'");
+		}
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+		// Declare an interface that contains the new operation		
+		var opInterface = new Source!Interface();
+		opInterface.name = "I_" + op.name;
+		opInterface.operations.add(opSig);
+		
+		// Add interface to current package.
+		pkg.interfaces.add(opInterface);
+		
+		// Make this interface required by stm.
+		//stm.rInterfaces.add(opInterface);
+		opDef.rInterfaces.add(opInterface);
+		
+		// Introduce a Call to the newly defined operation.
+		var opCall = new Source!Call();
+		// Replace the statement in action 'a' by a call to the operation signature opSig.
+		//
+		// Note that from the point of view of the call in the state-machine it only knows
+		// about the interface opInterface, and not about where the operation is
+		// actually defined, so the call is in terms of this OperationSig.
+		
+		opCall.`operation` = opSig;
+		t.action = opCall;
+		
+		searchSTMRequiresOp(opDef,opInterface);
+		
+		if (debug)
+		{
+			printDebug("End - Replace Statements In Transitions Of Composite State Of Operation By Operations");
+			printDebug("New operation '" + op.name + " Parent operation " + opDef.name + "' (action: " + t.action + ")");
+			
+			//for (ts in op.transitions) {
+			//	printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ")");
+			//}
+		}
+	}
+}
+*/
+
+
+//Serach state machine that requires an operation
+operation searchSTMRequiresOp(op:Source!OperationDef, newInterface:Source!Interface){
+
+   var intName = "I_"+op.name;
+   printDebug("intName " + intName);
+   var stms = new Set(Source!StateMachineDef);
+   for ( st in Source!StateMachineDef ){
+        printDebug("machine name " + st.name);
+   		var interfaces = st.rInterfaces.asSet();
+   		printDebug("interfaces " + interfaces);
+   		for (i in interfaces){
+   		    //printDebug("i.name " + i.name);
+   			if (i.name==intName){
+   				st.rInterfaces.add(newInterface);
+   				printDebug("st.rInterfaces.add(newInterface) " + newInterface.name);
+   				break;
+   			}
+   		}
+   }
+   
+   
+
+}
+
+operation replaceUsedVariables(i:Source!Interface,a:Source!Statement) {
+	
+	// Compute all objects of the metamodel that are contained by transitivity in a.
+	var statementContents = a.closure(x|x.eContents());
+	printDebug("statementContents " + statementContents);
+	// An Interface is a BasicContext, which can have sequences of VariableList elements,
+	// so we create a new VariableList and add this to the sequence.
+	var variableList = new Source!VariableList();
+	var constantList = new Source!VariableList();
+	
+	variableList.modifier = Source!VariableModifier#VAR;	// Variables
+	constantList.modifier = Source!VariableModifier#CONST; 	// Constants
+		
+	var varrefs = statementContents.select(y:Source!VarRef|true).collect(z:Source!VarRef|z.name).asSet();
+	var varexps = statementContents.select(y:Source!RefExp|true).collect(z:Source!RefExp|z.ref).asSet();
+	
+	printDebug("UsedVarsInStatement");
+	printDebug("variables " + varrefs + varexps);
+	// Return the union of these two sets.
+	//return varrefs + varexps;	
+	
+	for (v in (varrefs+varexps)){      
+	       var newVar = ecoreUtil.copy(v);
+	       printDebug("Copying variable '" + v.name + "'");
+	       //var newVar = v;
+	       printDebug("Copying variable '" + newVar.name + "'");
+	       
+	       if (v.modifier == Source!VariableModifier#VAR)
+			variableList.vars.add(newVar);
+		   else
+			constantList.vars.add(newVar);	       
+			
+	        // Update all variable references to the old variable declaration 'v' => newVar.
+			for (varref in statementContents.select(x:Source!VarRef|x.name = v)) {
+				varref.name = newVar;
+			}
+			// Update all expression references to the old variable declaration 'v' => newVar.
+			for (refexp in statementContents.select(x:Source!RefExp|x.ref = v)) {
+				refexp.ref = newVar;
+			}
+		
+	    }
+	    
+	 
+
+	/*	
+	// Used variables by this action that need to be redeclared in a
+	// new interface. 
+	for (xp in UsedVars!StatementUsedVariables.all.select(p|p.a=a)) {
+			
+		// Create the new variable (declaration).
+		var newVar = ecoreUtil.copy(xp.v);
+			
+		printDebug("Copying variable '" + xp.v.name + "'");
+		// Copy the 'name' and its 'type' fields.
+		//newVar.name = xp.v.name;
+		
+		//newVar.type = ecoreUtil.copy(xp.v.type); // -ls-jar for fat jar.
+		//newVar.modifier = xp.v.modifier; derived
+		
+		// Q: Should the variable/constant be initialized in the interface?
+		//	  Potentially such an initialization could reference other variables
+		//	  or constants declared in the state-machine, the controller, or platform.
+		//
+		//	  With the understanding that such a variable will be initialized by the
+		//	  state-machine, we should not copy the initialization? Otherwise, what
+		//	  how could an initialization in a interface reference variables declared
+		//	  somewhere else?
+		//
+		// newVar.initial = ?
+			
+		// Add it to the new interface created above, either as a pure variable or constant.
+		if (xp.v.modifier == Source!VariableModifier#VAR)
+			variableList.vars.add(newVar);
+		else
+			constantList.vars.add(newVar);
+			
+		// Replace all variable references to the old variable declaraiton 'xp.v' => newVar.
+		for (varref in actionContents.select(x:Source!VarRef|x.name = xp.v)) {
+			varref.name = newVar;
+		}
+		// Update all expression references to the old variable decalration 'xp.v' => newVar.
+		for (refexp in actionContents.select(x:Source!RefExp|x.ref = xp.v)) {
+			refexp.ref = newVar;
+		}
+	}
+*/
+	
+	// In principle, we could add empty lists.. but here we make sure not to do so.
+	if (variableList.vars.size > 0) {
+		i.variableList.add(variableList);
+	} else {
+		delete variableList;
+	}
+	
+	if (constantList.vars.size > 0){
+		i.variableList.add(constantList);
+	} else {
+		delete constantList;
+	}
+}
+
+operation replaceUsedEvents(i:Source!Interface,a:Source!Statement) {
+	
+	// Compute all objects of the metamodel that are contained by transitivity in a.
+	var actionContents = a.closure(x|x.eContents());
+	// Used variables by this action that need to be redeclared in a
+	// new interface. 
+
+	var events5 = actionContents.select(x:Source!Communication|true).collect(z:Source!Communication|z.event).asSet();
+	printDebug("events5replaceUsedEvents " + events5);
+	printDebug("events5replaceUsedEvents " + a);
+
+/*	
+	for (sd in actionContents){
+	    printDebug("sd in actionContents " + sd);
+	    //SendEvent: ('send')? trigger=ActualTrigger
+	   if (sd.isKindOf(Source!SendEvent)){
+	   	
+	   	printDebug("sd.trigger.name " + sd.trigger.event.name);
+	   	var newEvent = ecoreUtil.copy(sd.trigger.event);
+	   	i.events.add(newEvent);
+	   	
+	   	// Replace all event references to the old event declaraiton 'xp.v' => newVar.
+		for (t in actionContents.select(x:Source!Communication|x.event = sd.trigger.event)) {
+			t.event = newEvent;
+		}
+	   }
+	}
+*/
+
+    for (xp in events5) {
+        printDebug("xp " + xp);	
+        var newEvent = ecoreUtil.copy(xp);
+		printDebug("newEvent " + newEvent);	
+		i.events.add(newEvent);
+		for (t in actionContents.select(x:Source!Communication|x.event = xp)) {
+			t.event = newEvent;
+		}
+    }
+	
+	/*
+	for (xp in ActionUsedEvents.all.select(p|p.a=a)) {
+			
+		// Create the new variable (declaration).
+		var newEvent = ecoreUtil.copy(xp.e);
+		printDebug("newEvent " + newEvent);	
+		// Copy the 'type' and 'name' fields
+		//newEvent.name = xp.e.name;
+		
+		// Just copy it, don't bother resolving types and so forth.
+		
+		i.events.add(newEvent);
+				
+		// Replace all event references to the old event declaraiton 'xp.v' => newVar.
+		for (t in actionContents.select(x:Source!Communication|x.event = xp.e)) {
+			t.event = newEvent;
+		}
+	}
+*/
+}
+
+/*
+// Matches events used in statements.
+pattern ActionUsedEvents
+	s : Source!Statement,
+	e : Source!Event 
+	from: UsedEventsInAction(s)
+	{
+	match: e.isTypeOf(Source!Event)
+	//a.closure(x|x.eContents()).exists(x:Source!Communication|x.event = e) // The element is SendEvent but contains a Trigger
+	}
+	
+	
+// Given an Action this operation returns the set of all 'used' events.
+operation UsedEventsInAction(a:Statement) {
+	var contents = a.closure(x|x.eContents());
+	
+	return contents.select(x:Source!Communication|true).collect(z:Source!Communication|z.event).asSet();
+}
+*/

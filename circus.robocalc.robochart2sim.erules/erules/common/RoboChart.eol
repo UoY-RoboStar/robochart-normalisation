@@ -1,0 +1,1318 @@
+
+
+//This operation returns the StateMachineDef and OperationDef of an RCPackage
+operation smbs(pkg : Source!RCPackage){
+  return pkg.machines + pkg.operations;
+}
+
+//This operation returns the OperationDefs of all controllers of an RCPackage
+operation opsFromCtrl(pkg : Source!RCPackage){
+		var opsCtrls = new Set(Source!OperationDef);
+		for (c in Source!ControllerDef.all) {
+			for (op in c.lOperations){
+			    printDebug(" opsFromCtrl " + op.name);
+				opsCtrls.add(getOperation(op));
+				
+			}
+		}
+		return opsCtrls;
+}
+
+operation fullNameSmb(s:StateMachineBody) {
+	return s.name;
+}
+operation fullNameSmb(s:NamedElement) {
+	if (s.eContainer() <> null) { return fullNameSmb(s.eContainer()) + "_" + s.name; } else { return s.name; }
+}
+
+operation getFather(s:State) {
+	//if (s.eContainer() <> null)
+	  printDebug(" getFather(s) " + s.name + " is " + s.eContainer());
+	  return s.eContainer();
+}
+//operation getFather(s:Node) {
+//	if (s.eContainer() <> null) { return fullNameSt(s.eContainer()) + "_" + s.name; } else { return s.name; }
+//}
+
+//operation fullNameState(s:State) {
+//	return s.name;
+//}
+//operation fullNameState(s:NamedElement) {
+//	if (s.eContainer() <> null) { return fullNameState(s.eContainer()) + "_" + s.name; } else { return s.name; }
+//}
+
+//This operation returns the state machines and operations of an RCPackage
+operation smbs(pkg : Source!RCPackage){
+  return pkg.machines + pkg.operations;
+}
+
+operation nodes(smb : Source!StateMachineBody){
+  return smb.closure(x:Source!NodeContainer|x.nodes.selectByKind(Source!NodeContainer));
+}
+
+operation nodesSmb(smb : Source!StateMachineBody){
+  return smb.closure(x:Source!NodeContainer|x.nodes.selectByKind(Source!NodeContainer));
+}
+/*
+var mapSmb2Vars = new Map(String,Set(Source!Variable));
+
+var usedOpsNames = new Set(Source!String);
+
+//clocks
+var usedClocksNames = new Set(String);
+	
+//variables
+var usedVarsNames = new Set(String);
+
+//events
+var usedEvsNames = new Set(String);
+*/	
+
+// We can define operations.
+operation printDebug(string) {
+	if (debug) {(": "+string).println();}
+}
+
+
+
+operation actionName(a:Source!EntryAction) 	{ return "entry"; 	}
+operation actionName(a:Source!ExitAction) 	{ return "exit";	}
+operation actionName(a:Source!DuringAction) { return "during";	}
+
+operation getStateMachine(s:Source!StateMachineDef) { return s; }
+operation getStateMachine(s:Source!StateMachineRef) { return s.ref; }
+
+operation getOperation(s:Source!OperationDef) { return s; }
+operation getOperation(s:Source!OperationRef) { return s.ref; }
+
+operation ContainedInInterface(o:Any) {
+	
+	if (o.eContainer().isTypeOf(VariableList)) {
+		return ContainedInInterface(o.eContainer());
+	} else {
+		return o.eContainer().isTypeOf(Interface);
+	}
+}
+
+operation findRCPackage(o:Any) {
+	if (o.isTypeOf(Source!RCPackage)) {
+		return o;
+	} else if (o<>null) {
+		if (o.eContainer()<>null)
+			return findRCPackage(o.eContainer());
+		else
+			printDebug("Null eContainer of: " + o);
+	}
+}
+
+
+//operation usedVars(s:Source!Statement) {
+//
+//    var usedVarList = new Set(Source!VariableList);
+//	
+//	// Compute all objects of the metamodel that are contained by transitivity in s.
+//	var statementContents = s.closure(x|x.eContents());
+//	
+//	// We calculate two sets, the variables in a 'VarRef' and those in a 'RefExp'.
+//	var varrefs = statementContents.select(y:Source!VarRef|true).collect(z:Source!VarRef|z.name).asSet();
+//	//var varexps = contents.select(y:Source!RefExp|true).collect(z:Source!RefExp|z.ref).asSet();
+//	var varexps = statementContents.select(y:Source!RefExp|not(y.ref.isTypeOf(Source!Function))).collect(z:Source!RefExp|z.ref).asSet();
+//	
+//	// An Interface is a BasicContext, which can have sequences of VariableList elements,
+//	// so we create a new VariableList and add this to the sequence.
+//	var variableList = new Source!VariableList();
+//	var constantList = new Source!VariableList();
+//	usedVarsNames = new Set(String);
+//	
+//	variableList.modifier = Source!VariableModifier#VAR;	// Variables
+//	constantList.modifier = Source!VariableModifier#CONST; 	// Constants
+//			
+//	printDebug("varrefs " + varrefs);
+//	printDebug("varexps " + varexps);
+//	    
+//	//OK, but error with required variables
+//	for (v in (varrefs+varexps)){      
+//	       var newVar = ecoreUtil.copy(v);
+//	       usedVarsNames.add(newVar.name);
+//	       if (v.modifier == Source!VariableModifier#VAR)
+//			variableList.vars.add(newVar);
+//		   else
+//			constantList.vars.add(newVar);	       
+//			
+//	        // Update all variable references to the old variable declaration 'v' => newVar.
+//			for (varref in statementContents.select(x:Source!VarRef|x.name = v)) {
+//				varref.name = newVar;
+//			}
+//			// Update all expression references to the old variable declaration 'v' => newVar.
+//			for (refexp in statementContents.select(x:Source!RefExp|x.ref = v)) {
+//				refexp.ref = newVar;
+//			}
+//		
+//	    }
+//	    
+//	 // In principle, we could add empty lists.. but here we make sure not to do so.
+//	if (variableList.vars.size > 0) {
+//		usedVarList.add(variableList);
+//	} else {
+//		delete variableList;
+//	}
+//	
+//	if (constantList.vars.size > 0){
+//		usedVarList.add(constantList);
+//	} else {
+//		delete constantList;
+//	}
+//	
+//	return usedVarList;
+//}
+//
+//operation usedOps(s:Statement) {
+//
+//    var usedOps = new Set(Source!OperationSig);
+//    usedOpsNames = new Set(String);
+//	// Compute all objects of the metamodel that are contained by transitivity in s.
+//	var statementContents = s.closure(x|x.eContents());
+//	var contents = statementContents.select(y:Source!Call|true).collect(z:Source!Call|z.`operation`).asSet();
+//	
+//	for (op in contents){
+//		var newOpSig = ecoreUtil.copy(op);
+//        	
+//		for (stmt in statementContents.select(x:Source!Call|x.`operation` = op)) {
+//			stmt.`operation` = newOpSig;
+//		}
+//		//Adding newOpSig into the Interface
+//		usedOps.add(newOpSig);
+//		usedOpsNames.add(newOpSig.name);
+//      } 
+//   return usedOps;
+//       
+//}
+//
+//operation usedClocks(s:Source!Statement){
+//
+//  var usedClocks = new Set(Source!Clock);
+//  usedClocksNames = new Set(String);
+//  
+//  // Compute all objects of the metamodel that are contained by transitivity in s.
+//  var statementContents = s.closure(x|x.eContents());
+//  var contents = statementContents.select(x:Source!ClockReset|true).collect(z:Source!ClockReset|z.clock).asSet();  
+//  
+//  for (clk in contents){
+//      // Create the new clock declaration
+//	  var newClock = ecoreUtil.copy(clk);   
+//      // Replace all clock references
+//		for (stmt in statementContents.select(x:Source!ClockReset|x.clock = clk)) {
+//		    //printDebug("t.clock " + t.clock);
+//			stmt.clock = newClock;
+//		}
+//		
+//	  usedClocks.add(newClock);
+//	  usedClocksNames.add(newClock.name);
+//  }
+//  
+//  if (s.isKindOf(Source!ClockReset)){
+//     printDebug("s.isKindOf(Source!ClockReset) " + s.clock.name);
+//     var newClock = ecoreUtil.copy(s.clock);
+//     s.clock = newClock;
+//     usedClocks.add(newClock);
+//     usedClocksNames.add(newClock.name);
+//  }
+//  
+//  return usedClocks;
+//}
+//
+//operation usedEvents(s:Source!Statement) {
+//	
+//	var usedEvents = new Set(Source!Event);
+//	usedEvsNames = new Set(String);
+//	// Compute all objects of the metamodel that are contained by transitivity in s.
+//	var statementContents = s.closure(x|x.eContents());
+//	var contents = statementContents.select(x:Source!Communication|true).collect(z:Source!Communication|z.event).asSet();
+//
+//    for (ev in contents) {
+//        //printDebug("ev " + ev);	
+//        var newEvent = ecoreUtil.copy(ev);
+//		//printDebug("newEvent " + newEvent);	
+//		for (stmt in statementContents.select(x:Source!Communication|x.event = ev)) {
+//			stmt.event = newEvent;
+//		}
+//		usedEvents.add(newEvent);
+//		usedEvsNames.add(newEvent.name);
+//    }
+//    
+//   return usedEvents;
+//	
+//}
+//
+//operation reqVarsOps(s:Statement) {
+//
+//    var variableList = new Source!VariableList();
+//	var constantList = new Source!VariableList();
+//	
+//	variableList.modifier = Source!VariableModifier#VAR;	// Variables
+//	constantList.modifier = Source!VariableModifier#CONST; 	// Constants
+//	
+//    var reqVarsOps = new Set(Source!VariableList);
+//   
+//    var softOpNames = collectSoftwareOperationsName();
+//    var softOps = collectSoftwareOperations();
+//   
+//    for(op in usedOpsNames){
+//          if (softOps.includes(c:Source!OperationDef|c.name.equals(op.name))){
+//            var operationDef = softOps.select(c:Source!OperationDef|c.name.equals(op.name));
+//            for (r in operationDef.rInterfaces){
+//		      	for (vl in r.variableList){
+//		      	  for (v in vl.vars){
+//		      	  	if (not usedVarsNames.includes(v.name)){
+//		      	    	//printDebug("usedVarsNames.includes(v.name) " + v.name);
+//		      	    	var newVar = ecoreUtil.copy(v);
+//		      	    	if (v.modifier == Source!VariableModifier#VAR)
+//							variableList.vars.add(newVar);
+//		   	            else
+//							constantList.vars.add(newVar);	 
+//		      	    	usedVarsNames.add(newVar.name);
+//		          }
+//		        } 
+//		 
+//		      }
+//       
+//          }
+//           // In principle, we could add empty lists.. but here we make sure not to do so.
+//			if (variableList.vars.size > 0) {
+//				usedVarList.add(variableList);
+//			} else {
+//				delete variableList;
+//			}
+//	
+//			if (constantList.vars.size > 0){
+//				usedVarList.add(constantList);
+//			} else {
+//				delete constantList;
+//			}
+//       }
+//    
+//   }
+//   return reqVarsOps;
+//       
+//}
+//
+//operation reqClocksOps(s:Statement) {
+//	
+//    var reqClocksOps = new Set(Source!Clock);
+//    var softOps = collectSoftwareOperations();
+//   
+//    for(op in usedOpsNames){
+//          if (softOps.includes(c:Source!OperationDef|c.name.equals(op.name))){
+//            var operationDef = softOps.select(c:Source!OperationDef|c.name.equals(op.name));
+//            for (r in operationDef.rInterfaces){
+//		      	for (clk in r.clocks){
+//		      	  	if (not usedClocksNames.includes(clk.name)){
+//		      	    	var newClk = ecoreUtil.copy(clk); 
+//		      	        reqClocksOps.add(newClk);
+//		      	        usedClocksNames.add(newClk.name);
+//		          }
+//		         
+//		      }
+//			}
+//       }
+//    
+//   }
+//   return reqClocksOps;
+//       
+//}
+//
+//operation defEvOps(s:Statement) {
+//	
+//    var defEvOps = new Set(Source!Event);
+//    var softOps = collectSoftwareOperations();
+//   
+//    for(op in usedOpsNames){
+//          if (softOps.includes(c:Source!OperationDef|c.name.equals(op.name))){
+//            var operationDef = softOps.select(c:Source!OperationDef|c.name.equals(op.name));
+//            for (i in operationDef.interfaces){
+//		      	for (ev in i.events){
+//		      	  	if (not usedEvsNames.includes(ev.name)){
+//		      	    	var newEv = ecoreUtil.copy(ev); 
+//		      	        defEvOps.add(newEv);
+//		      	        usedEvsNames.add(newEv.name);
+//		          }
+//		         
+//		      }
+//			}
+//       }
+//    
+//   }
+//   return defEvOps;
+//       
+//}
+
+operation setName(smb : Source!StateMachineBody, S : Source!State, s: Source!Action){
+ 
+ return "normal_" + fullNameSt(S) + "_" + actionName(s) + "_op";
+ //"normal_" + smb.name + "_" + S.name + "_" + actionName(s) + "_op";
+
+}
+
+operation setName(smb : Source!StateMachineBody, S : Source!Node, t: Source!Transition){
+ 
+ //return "normal_" + smb.name + "_" + S.name + "_" + t.name + "_op";
+ return fullNameSmb(S) + "_" + t.name + "_op";
+
+}
+
+
+operation setName(smb : Source!StateMachineBody, S : Source!State, st : Source!Node, s: Source!Action){
+ 
+ return "normal_" + smb.name + "_" + S.name + "_" + st.name + "_" + actionName(s) + "_op";
+
+}
+
+operation setName(smb : Source!StateMachineBody, S : Source!Node, st : Source!Node, t: Source!Transition){
+ 
+ return //"normal_" + 
+        smb.name + "_" + fullNameSt(S) + "_" + st.name + "_" + t.name + "_op";
+
+}
+
+///////////////////////////////////////////////////////////////////
+operation collectSoftwareOperations(ctrl:Source!ControllerDef) {
+	
+	var opSoft = new Set(Source!OperationDef);
+	
+	var contents = ctrl.closure(x|x.eContents());
+			
+		//Collecting the software operations (both OperationRef and OperationDef)	
+		var opRefs = contents.select(y:Source!OperationRef|true).collect(op:Source!OperationRef|op.ref).asSet();
+		var opDefs = contents.select(y:Source!OperationDef|true).collect(op:Source!OperationDef|op).asSet(); //only op?
+		 
+		for (op in opRefs){
+		   //printDebug("Operation Ref: " + op.name);
+		   opSoft.add(op);
+		}
+		
+		for (op in opDefs){
+		   //printDebug("Operation Def: " + op.name);
+		   opSoft.add(op);
+		}
+
+	return opSoft;
+}
+
+operation collectSoftwareOperationsName(ctrl:Source!ControllerDef) {
+	
+	var opSoft = new Set(String);
+	
+	var contents = ctrl.closure(x|x.eContents());
+			
+		//Collecting the software operations (both OperationRef and OperationDef)	
+		var opRefs = contents.select(y:Source!OperationRef|true).collect(op:Source!OperationRef|op.ref).asSet();
+		var opDefs = contents.select(y:Source!OperationDef|true).collect(op:Source!OperationDef|op).asSet(); //only op?
+		 
+		for (op in opRefs){
+		   //printDebug("Operation Ref: " + op.name);
+		   opSoft.add(op.name);
+		}
+		
+		for (op in opDefs){
+		   //printDebug("Operation Def: " + op.name);
+		   opSoft.add(op.name);
+		}
+
+	return opSoft;
+}
+
+operation collectSoftwareOperationsName() {
+	
+	var opSoftNames = new Set(String);
+	var opDefs = new Set(Source!OperationDef);
+	
+	var ctrlDefs = new Set(Source!ControllerDef);
+	
+	for (c in Source!ControllerDef){
+	  //ctrlDef.add(c);
+	  var contents = c.closure(x|x.eContents());
+	  //Collecting the software operations (both OperationRef and OperationDef)	
+		var opRefSet = contents.select(y:Source!OperationRef|true).collect(op:Source!OperationRef|op.ref).asSet();
+		opDefs.addAll(opRefSet);
+		var opDefSet = contents.select(y:Source!OperationDef|true).collect(op:Source!OperationDef|op).asSet();
+		opDefs.addAll(opDefSet);
+	    
+	}
+	
+	for (cRef in Source!ControllerRef){
+	  //ctrlDef.add(cRef.ref);
+	  var contents = cRef.ref.closure(x|x.eContents());
+	  var opRefSet = contents.select(y:Source!OperationRef|true).collect(op:Source!OperationRef|op.ref).asSet();
+		opDefs.addAll(opRefSet);
+		var opDefSet = contents.select(y:Source!OperationDef|true).collect(op:Source!OperationDef|op).asSet();
+		opDefs.addAll(opDefSet);
+	}
+	
+	
+		 
+   for (op in opDefs){
+		   //printDebug("Operation Ref: " + op.name);
+		  opSoftNames.add(op.name);
+}
+		
+
+	return opSoftNames;
+}
+
+operation collectSoftwareOperations(){
+
+  var softOps = new Set(Source!OperationDef);
+
+	var opDefs = new Set(Source!OperationDef);
+	
+	var ctrlDefs = new Set(Source!ControllerDef);
+	
+	for (c in Source!ControllerDef){
+	  //ctrlDef.add(c);
+	  var contents = c.closure(x|x.eContents());
+	  //Collecting the software operations (both OperationRef and OperationDef)	
+		var opRefSet = contents.select(y:Source!OperationRef|true).collect(op:Source!OperationRef|op.ref).asSet();
+		softOps.addAll(opRefSet);
+		var opDefSet = contents.select(y:Source!OperationDef|true).collect(op:Source!OperationDef|op).asSet();
+		softOps.addAll(opDefSet);
+	    
+	}
+	
+	for (cRef in Source!ControllerRef){
+	  //ctrlDef.add(cRef.ref);
+	  var contents = cRef.ref.closure(x|x.eContents());
+	  var opRefSet = contents.select(y:Source!OperationRef|true).collect(op:Source!OperationRef|op.ref).asSet();
+		softOps.addAll(opRefSet);
+		var opDefSet = contents.select(y:Source!OperationDef|true).collect(op:Source!OperationDef|op).asSet();
+		softOps.addAll(opDefSet);
+	}
+	
+	
+ 
+ return softOps;
+}
+
+////////////////-from NormalFormTransitions.epl - 16/11
+
+//For each state machine that requires op, 
+//this operation makes such a state machine requires IdeadlineCheck and a desired interface
+//operation searchMachine(pkg : Source!RCPackage,op:Source!OperationDef, interface:Source!Interface){
+//  
+//        var nameInterface = "I_" + op.name;
+//	    //printDebug("nameInterface " + nameInterface);
+//	    var reqInterface = pkg.interfaces.selectOne(i | i.name = nameInterface);
+//	    //var interfaces = pkg.interfaces.asSet();
+//	    printDebug("reqInterface " + reqInterface);
+//	    //printDebug("tnterfaces " + interfaces);
+//  
+//  for ( stm : Source!StateMachineDef in pkg.machines){
+//	    
+//		if (stm.rInterfaces.contains(reqInterface)){
+//		    //printDebug("stm.rInterfaces.contains(reqInterface) " + reqInterface.name);
+//			stm.rInterfaces.add(pkg.interfaces.selectOne(i | i.name = "IdeadlineCheck"));
+//			stm.rInterfaces.add(interface);
+//		}
+//	}
+//  
+//}
+
+operation usedOps(req:Source!Interface,a:Source!Action,defEv:Source!Interface) {
+
+  
+    var copiedOps = new Set(Source!OperationSig);
+
+	// Compute all objects of the metamodel that are contained by transitivity in a.
+	var actionContents = a.closure(x|x.eContents());
+	var contents = actionContents.select(y:Source!Call|true).collect(z:Source!Call|z.`operation`).asSet();
+	
+	//We iterate over the set contents, which contains the operations used by the action a
+	for (op in contents){
+	    printDebug("op.name " + op.name);	
+		//We create a copy of op (here, it is an OperationSig)
+		var newOpSig = ecoreUtil.copy(op);	
+		for (t in actionContents.select(x:Source!Call|x.`operation` = op)) {
+			t.`operation` = newOpSig;
+		}
+	
+		//Adding newOpSig into the Interface
+		req.operations.add(newOpSig);
+		copiedOps.add(newOpSig);
+	}	
+	
+	var opNames = new Set(String);
+	for (op in copiedOps){
+	     opNames.add(op.name);
+	}
+	//printDebug("opNames " + opNames);
+	
+	//clocks
+	var usedClocksNames = new Set(String);
+	for (clk in req.clocks){
+	     printDebug("clk.name " + clk.name);
+	     usedClocksNames.add(clk.name);
+	}
+	//variables
+	usedVarsNames = new Set(String);
+	for (vl in req.variableList){
+	   for (v in vl.vars){
+	      usedVarsNames.add(v.name);
+	   }   
+	}
+	var variableList = new Source!VariableList();
+	var constantList = new Source!VariableList();
+	
+	variableList.modifier = Source!VariableModifier#VAR;	// Variables
+	constantList.modifier = Source!VariableModifier#CONST; 	// Constants
+	 
+	//events
+	var evNames = new Set(String);
+	for (ev in defEv.events){
+	     evNames.add(ev.name);
+	}
+	//printDebug("evNames " + evNames);
+	
+		/*We need to capture the OperationDef of the previous copied OperationSig.
+		This is required because we need to collect all events, variables, clocks, and other operations used by such a copied operation,
+		Only an OperationDef contains such elements, 
+        */
+        
+   for (copiedOp in copiedOps){
+      //We need to use the following verification because a platform operation may be not have a definition
+      if (exists(c:Source!OperationDef|c.name.equals(copiedOp.name) and c.terminates == false)){
+		var operationDef = selectOne(c:Source!OperationDef|c.name.equals(copiedOp.name));
+		
+		
+		if (operationDef.terminates == true){
+		    printDebug(operationDef.name + " is a platform operation");
+	    } 
+		else{	   
+		   printDebug(operationDef.name + " is a software operation");
+		   for (r in operationDef.rInterfaces){
+		   //printDebug(r.name + " operationDef.rInterfaces"); 
+		   //operations   
+		   if (r.operations.size() > 0){
+		      	for (o in r.operations){
+		      	  //printDebug("o.name " + o.name);
+		      	  if (opNames.includes(o.name)){
+		      	   // printDebug("opNames.includes(o.name)");
+		      	  }
+		      	  else{
+		      	    var newOpSig = ecoreUtil.copy(o);	 
+		      	    req.operations.add(newOpSig);
+		      	    opNames.add(newOpSig.name);
+		      	  }
+		             
+		        } 
+		        
+		      }// end of r.operations.size() > 0
+		      
+		    //clocks
+		    //printDebug( "Cloks begin for interface" + r.name);
+		    if (r.clocks.size() > 0){
+		   // printDebug(r.name + " we are in r.clocks.size() > 0");
+		      	for (clk in r.clocks){
+		      	  //printDebug("clock.name " + clk.name);
+		      	  if (usedClocksNames.includes(clk.name)){
+		      	    //printDebug("usedClocksNames.includes(clk.name) " + clk.name);
+		      	  }
+		      	  else{
+		      	    var newClk = ecoreUtil.copy(clk);
+		      	    //printDebug("req.clocks.add(newClk) " + newClk.name);	 
+		      	    req.clocks.add(newClk);
+		      	    usedClocksNames.add(newClk.name);
+		      	  }
+		             
+		        } 
+		        
+		      }//end of r.clocks.size() > 0
+		       //printDebug( "Cloks end ");
+		     
+		    //variables
+		    if (r.variableList.size() > 0){
+		      	for (vl in r.variableList){
+		      	  for (v in vl.vars){
+		      	  	if (usedVarsNames.includes(v.name)){
+		      	    	//printDebug("usedVarsNames.includes(v.name) " + v.name);
+		      	  	}
+		      	  	else{
+		      	    	var newVar = ecoreUtil.copy(v);
+		      	    	if (v.modifier == Source!VariableModifier#VAR)
+							variableList.vars.add(newVar);
+		   	            else
+							constantList.vars.add(newVar);	 
+		      	    	usedVarsNames.add(newVar.name);
+		      	  	   }	
+		          }
+		        } 
+		       
+		      }//end of r.variableList.size() > 0
+		      }//end of for (r in operationDef.rInterfaces)
+		  
+		  if (variableList.vars.size > 0) {
+					i.variableList.add(variableList);
+	           } else {
+				 delete variableList;
+	            }
+	
+		      if (constantList.vars.size > 0){
+		          i.variableList.add(constantList);
+	         } else {
+		        delete constantList;
+	          } 
+		  
+		  for (i in operationDef.interfaces){
+		    //printDebug("i.name " + i.name);
+		    if (i.events.size() > 0){
+		         for (ev in i.events){
+		          printDebug("ev.name" + ev.name);
+		             if (evNames.includes(ev.name)){
+		                  //printDebug("defEv already includes " + ev.name);
+		               }
+		            else {
+		               var newEv = ecoreUtil.copy(ev);
+		               defEv.events.add(newEv);
+		               evNames.add(newEv.name);
+		               }
+
+		      }
+
+		   }
+           
+		  
+		}
+		
+		//events declared locally
+//		for (ev in op.events){
+//		     printDebug("ev.name " + ev.name);
+//		     if (not evNames.includes(ev.name)){
+//		         var newEv = ecoreUtil.copy(ev);
+//		         defEv.events.add(newEv);
+//		         evNames.add(newEv.name);
+//		     }
+//		     
+//		     
+//        }
+        
+  }//end of else
+  }
+}// end of for op 
+}
+
+
+operation usedOps(req:Source!Interface,a:Source!Statement,defEv:Source!Interface) {
+
+    
+    var copiedOps = new Set(Source!OperationSig);
+
+	// Compute all objects of the metamodel that are contained by transitivity in a.
+	var actionContents = a.closure(x|x.eContents());
+	var contents = actionContents.select(y:Source!Call|true).collect(z:Source!Call|z.`operation`).asSet();
+	
+	//We iterate over the set contents, which contains the operations used by the action a
+	for (op in contents){
+	    printDebug("op.name " + op.name);	
+		//We create a copy of op (here, it is an OperationSig)
+		var newOpSig = ecoreUtil.copy(op);	
+		for (t in actionContents.select(x:Source!Call|x.`operation` = op)) {
+			t.`operation` = newOpSig;
+		}
+	
+		//Adding newOpSig into the Interface
+		req.operations.add(newOpSig);
+		copiedOps.add(newOpSig);
+	}	
+	
+	var opNames = new Set(String);
+	for (op in copiedOps){
+	     opNames.add(op.name);
+	}
+	//printDebug("opNames " + opNames);
+	
+	//clocks
+	var usedClocksNames = new Set(String);
+	for (clk in req.clocks){
+	     printDebug("clk.name " + clk.name);
+	     usedClocksNames.add(clk.name);
+	}
+	//variables
+	usedVarsNames = new Set(String);
+	for (vl in req.variableList){
+	   for (v in vl.vars){
+	      usedVarsNames.add(v.name);
+	   }   
+	}
+	var variableList = new Source!VariableList();
+	var constantList = new Source!VariableList();
+	
+	variableList.modifier = Source!VariableModifier#VAR;	// Variables
+	constantList.modifier = Source!VariableModifier#CONST; 	// Constants
+	 
+	//events
+	var evNames = new Set(String);
+	for (ev in defEv.events){
+	     evNames.add(ev.name);
+	}
+	//printDebug("evNames " + evNames);
+	
+		/*We need to capture the OperationDef of the previous copied OperationSig.
+		This is required because we need to collect all events, variables, clocks, and other operations used by such a copied operation,
+		Only an OperationDef contains such elements, 
+        */
+        
+   for (copiedOp in copiedOps){
+      //We need to use the following verification because a platform operation may be not have a definition
+      if (exists(c:Source!OperationDef|c.name.equals(copiedOp.name) and c.terminates == false)){
+		var operationDef = selectOne(c:Source!OperationDef|c.name.equals(copiedOp.name));
+		
+		
+		if (operationDef.terminates == true){
+		    printDebug(operationDef.name + " is a platform operation");
+	    } 
+		else{	   
+		   printDebug(operationDef.name + " is a software operation");
+		   for (r in operationDef.rInterfaces){
+		   //printDebug(r.name + " operationDef.rInterfaces"); 
+		   //operations   
+		   if (r.operations.size() > 0){
+		      	for (o in r.operations){
+		      	  //printDebug("o.name " + o.name);
+		      	  if (opNames.includes(o.name)){
+		      	   // printDebug("opNames.includes(o.name)");
+		      	  }
+		      	  else{
+		      	    var newOpSig = ecoreUtil.copy(o);	 
+		      	    req.operations.add(newOpSig);
+		      	    opNames.add(newOpSig.name);
+		      	  }
+		             
+		        } 
+		        
+		      }// end of r.operations.size() > 0
+		      
+		    //clocks
+		    //printDebug( "Cloks begin for interface" + r.name);
+		    if (r.clocks.size() > 0){
+		   // printDebug(r.name + " we are in r.clocks.size() > 0");
+		      	for (clk in r.clocks){
+		      	  //printDebug("clock.name " + clk.name);
+		      	  if (usedClocksNames.includes(clk.name)){
+		      	    //printDebug("usedClocksNames.includes(clk.name) " + clk.name);
+		      	  }
+		      	  else{
+		      	    var newClk = ecoreUtil.copy(clk);
+		      	    //printDebug("req.clocks.add(newClk) " + newClk.name);	 
+		      	    req.clocks.add(newClk);
+		      	    usedClocksNames.add(newClk.name);
+		      	  }
+		             
+		        } 
+		        
+		      }//end of r.clocks.size() > 0
+		       //printDebug( "Cloks end ");
+		     
+		    //variables
+		    if (r.variableList.size() > 0){
+		      	for (vl in r.variableList){
+		      	  for (v in vl.vars){
+		      	  	if (usedVarsNames.includes(v.name)){
+		      	    	//printDebug("usedVarsNames.includes(v.name) " + v.name);
+		      	  	}
+		      	  	else{
+		      	    	var newVar = ecoreUtil.copy(v);
+		      	    	if (v.modifier == Source!VariableModifier#VAR)
+							variableList.vars.add(newVar);
+		   	            else
+							constantList.vars.add(newVar);	 
+		      	    	usedVarsNames.add(newVar.name);
+		      	  	   }	
+		          }
+		        } 
+		       
+		      }//end of r.variableList.size() > 0
+		      }//end of for (r in operationDef.rInterfaces)
+		  
+		  if (variableList.vars.size > 0) {
+					i.variableList.add(variableList);
+	           } else {
+				 delete variableList;
+	            }
+	
+		      if (constantList.vars.size > 0){
+		          i.variableList.add(constantList);
+	         } else {
+		        delete constantList;
+	          } 
+		  
+		  for (i in operationDef.interfaces){
+		    //printDebug("i.name " + i.name);
+		    if (i.events.size() > 0){
+		         for (ev in i.events){
+		          printDebug("ev.name" + ev.name);
+		             if (evNames.includes(ev.name)){
+		                  //printDebug("defEv already includes " + ev.name);
+		               }
+		            else {
+		               var newEv = ecoreUtil.copy(ev);
+		               defEv.events.add(newEv);
+		               evNames.add(newEv.name);
+		               }
+
+		      }
+
+		   }
+           
+		  
+		}
+		
+		//events declared locally
+//		for (ev in op.events){
+//		     printDebug("ev.name " + ev.name);
+//		     if (not evNames.includes(ev.name)){
+//		         var newEv = ecoreUtil.copy(ev);
+//		         defEv.events.add(newEv);
+//		         evNames.add(newEv.name);
+//		     }
+//		     
+//		     
+//        }
+        
+  }//end of else
+  }
+}// end of for op 
+}
+
+operation usedVars(i:Source!Interface,a:Source!Action) {
+	
+	// Compute all objects of the metamodel that are contained by transitivity in a.
+	var contents = a.closure(x|x.eContents());
+	
+	// We calculate two sets, the variables in a 'VarRef' and those in a 'RefExp'.
+	var varrefs = contents.select(y:Source!VarRef|true).collect(z:Source!VarRef|z.name).asSet();
+	//var varexps = contents.select(y:Source!RefExp|true).collect(z:Source!RefExp|z.ref).asSet();
+	var varexps = contents.select(y:Source!RefExp|not(y.ref.isTypeOf(Source!Function))).collect(z:Source!RefExp|z.ref).asSet();
+	
+	// An Interface is a BasicContext, which can have sequences of VariableList elements,
+	// so we create a new VariableList and add this to the sequence.
+	var variableList = new Source!VariableList();
+	var constantList = new Source!VariableList();
+	
+	variableList.modifier = Source!VariableModifier#VAR;	// Variables
+	constantList.modifier = Source!VariableModifier#CONST; 	// Constants
+			
+	printDebug("varrefs " + varrefs);
+	printDebug("varexps " + varexps);
+	    
+	//OK, but error with required variables
+	for (v in (varrefs+varexps)){      
+	       var newVar = ecoreUtil.copy(v);
+	       if (v.modifier == Source!VariableModifier#VAR)
+			variableList.vars.add(newVar);
+		   else
+			constantList.vars.add(newVar);	       
+			
+	        // Update all variable references to the old variable declaration 'v' => newVar.
+			for (varref in contents.select(x:Source!VarRef|x.name = v)) {
+				varref.name = newVar;
+			}
+			// Update all expression references to the old variable declaration 'v' => newVar.
+			for (refexp in contents.select(x:Source!RefExp|x.ref = v)) {
+				refexp.ref = newVar;
+			}
+		
+	    }
+	    
+	 // In principle, we could add empty lists.. but here we make sure not to do so.
+	if (variableList.vars.size > 0) {
+		i.variableList.add(variableList);
+	} else {
+		delete variableList;
+	}
+	
+	if (constantList.vars.size > 0){
+		i.variableList.add(constantList);
+	} else {
+		delete constantList;
+	}
+}
+
+operation usedVars(i:Source!Interface,a:Source!Statement) {
+	
+	// Compute all objects of the metamodel that are contained by transitivity in a.
+	var contents = a.closure(x|x.eContents());
+	
+	// We calculate two sets, the variables in a 'VarRef' and those in a 'RefExp'.
+	var varrefs = contents.select(y:Source!VarRef|true).collect(z:Source!VarRef|z.name).asSet();
+	//var varexps = contents.select(y:Source!RefExp|true).collect(z:Source!RefExp|z.ref).asSet();
+	var varexps = contents.select(y:Source!RefExp|not(y.ref.isTypeOf(Source!Function))).collect(z:Source!RefExp|z.ref).asSet();
+	
+	// An Interface is a BasicContext, which can have sequences of VariableList elements,
+	// so we create a new VariableList and add this to the sequence.
+	var variableList = new Source!VariableList();
+	var constantList = new Source!VariableList();
+	
+	variableList.modifier = Source!VariableModifier#VAR;	// Variables
+	constantList.modifier = Source!VariableModifier#CONST; 	// Constants
+			
+	printDebug("varrefs " + varrefs);
+	printDebug("varexps " + varexps);
+	    
+	//OK, but error with required variables
+	for (v in (varrefs+varexps)){      
+	       var newVar = ecoreUtil.copy(v);
+	       if (v.modifier == Source!VariableModifier#VAR)
+			variableList.vars.add(newVar);
+		   else
+			constantList.vars.add(newVar);	       
+			
+	        // Update all variable references to the old variable declaration 'v' => newVar.
+			for (varref in contents.select(x:Source!VarRef|x.name = v)) {
+				varref.name = newVar;
+			}
+			// Update all expression references to the old variable declaration 'v' => newVar.
+			for (refexp in contents.select(x:Source!RefExp|x.ref = v)) {
+				refexp.ref = newVar;
+			}
+		
+	    }
+	    
+	 // In principle, we could add empty lists.. but here we make sure not to do so.
+	if (variableList.vars.size > 0) {
+		i.variableList.add(variableList);
+	} else {
+		delete variableList;
+	}
+	
+	if (constantList.vars.size > 0){
+		i.variableList.add(constantList);
+	} else {
+		delete constantList;
+	}
+}
+
+
+operation usedClocks(i:Source!Interface,a:Source!Action){
+ 
+  // Compute all objects of the metamodel that are contained by transitivity in a.
+  var actionContents = a.closure(x|x.eContents());
+  
+  var clocks = actionContents.select(x:Source!ClockReset|true).collect(z:Source!ClockReset|z.clock).asSet();  
+  printDebug("clocks " + clocks);
+  
+  for (c in clocks){
+      //printDebug("replaceClocks " + c.name);
+      // Create the new clock declaration
+	  var newClock = ecoreUtil.copy(c);
+      //printDebug("newClock " + newClock);    
+      
+      // Replace all clock references
+		for (t in actionContents.select(x:Source!ClockReset|x.clock = c)) {
+		    printDebug("t.clock " + t.clock);
+			t.clock = newClock;
+			//printDebug("t.clock " + t.clock);
+		}
+		
+		 i.clocks.add(newClock);
+  }
+  
+  if (a.isKindOf(Source!ClockReset)){
+     printDebug("a.isKindOf(Source!ClockReset) " + a.clock.name);
+     var newClock = ecoreUtil.copy(a.clock);
+     a.clock = newClock;
+     i.clocks.add(newClock);
+     //clocks.add(a.clock);
+  }
+}
+
+
+operation usedClocks(i:Source!Interface,a:Source!Statement){
+ 
+  // Compute all objects of the metamodel that are contained by transitivity in a.
+  var actionContents = a.closure(x|x.eContents());
+  
+  var clocks = actionContents.select(x:Source!ClockReset|true).collect(z:Source!ClockReset|z.clock).asSet();  
+  printDebug("clocks " + clocks);
+  
+  for (c in clocks){
+      //printDebug("replaceClocks " + c.name);
+      // Create the new clock declaration
+	  var newClock = ecoreUtil.copy(c);
+      //printDebug("newClock " + newClock);    
+      
+      // Replace all clock references
+		for (t in actionContents.select(x:Source!ClockReset|x.clock = c)) {
+		    printDebug("t.clock " + t.clock);
+			t.clock = newClock;
+			//printDebug("t.clock " + t.clock);
+		}
+		
+		 i.clocks.add(newClock);
+  }
+  
+  if (a.isKindOf(Source!ClockReset)){
+     printDebug("a.isKindOf(Source!ClockReset) " + a.clock.name);
+     var newClock = ecoreUtil.copy(a.clock);
+     a.clock = newClock;
+     i.clocks.add(newClock);
+     //clocks.add(a.clock);
+  }
+}
+
+
+operation usedEvents(i:Source!Interface,a:Source!Action) {
+	
+	// Compute all objects of the metamodel that are contained by transitivity in a.
+	var actionContents = a.closure(x|x.eContents());
+	// Used variables by this action that need to be redeclared in a
+	// new interface. 
+
+	var eventsSet = actionContents.select(x:Source!Communication|true).collect(z:Source!Communication|z.event).asSet();
+	printDebug("events5replaceUsedEvents " + eventsSet);
+	printDebug("events5replaceUsedEvents " + a);
+
+
+    for (ev in eventsSet) {
+        printDebug("ev " + ev);	
+        var newEvent = ecoreUtil.copy(ev);
+		printDebug("newEvent " + newEvent);	
+		i.events.add(newEvent);
+		for (t in actionContents.select(x:Source!Communication|x.event = ev)) {
+			t.event = newEvent;
+		}
+    }
+	
+}
+
+operation usedEvents(i:Source!Interface,a:Source!Statement) {
+	
+	// Compute all objects of the metamodel that are contained by transitivity in a.
+	var actionContents = a.closure(x|x.eContents());
+	// Used variables by this action that need to be redeclared in a
+	// new interface. 
+
+	var eventsSet = actionContents.select(x:Source!Communication|true).collect(z:Source!Communication|z.event).asSet();
+	printDebug("events5replaceUsedEvents " + eventsSet);
+	printDebug("events5replaceUsedEvents " + a);
+
+
+    for (ev in eventsSet) {
+        printDebug("ev " + ev);	
+        var newEvent = ecoreUtil.copy(ev);
+		printDebug("newEvent " + newEvent);	
+		i.events.add(newEvent);
+		for (t in actionContents.select(x:Source!Communication|x.event = ev)) {
+			t.event = newEvent;
+		}
+    }
+	
+}
+
+operation replaceClocks(i:Interface,a:Statement){
+ 
+  // Compute all objects of the metamodel that are contained by transitivity in a.
+  var actionContents = a.closure(x|x.eContents());
+  
+  var clocks = actionContents.select(x:Source!ClockReset|true).collect(z:Source!ClockReset|z.clock).asSet();  
+  printDebug("clocks " + clocks);
+  
+  for (c in clocks){
+      //printDebug("replaceClocks " + c.name);
+      // Create the new clock declaration
+	  var newClock = ecoreUtil.copy(c);
+      //printDebug("newClock " + newClock);    
+      
+      // Replace all clock references
+		for (t in actionContents.select(x:Source!ClockReset|x.clock = c)) {
+		    printDebug("t.clock " + t.clock);
+			t.clock = newClock;
+			//printDebug("t.clock " + t.clock);
+		}
+		
+		 i.clocks.add(newClock);
+  }
+  
+  if (a.isKindOf(Source!ClockReset)){
+     printDebug("a.isKindOf(Source!ClockReset) " + a.clock.name);
+     var newClock = ecoreUtil.copy(a.clock);
+     a.clock = newClock;
+     i.clocks.add(newClock);
+     //clocks.add(a.clock);
+  }
+}
+
+
+operation usedVars(i:Source!Interface,e:Source!Expression) {
+	
+	// Compute all objects of the metamodel that are contained by transitivity in a.
+	var expressionContents = e.closure(x|x.eContents());
+	
+	// An Interface is a BasicContext, which can have sequences of VariableList elements,
+	// so we create a new VariableList and add this to the sequence.
+	var variableList = new Source!VariableList();
+	var constantList = new Source!VariableList();
+	
+	variableList.modifier = Source!VariableModifier#VAR;	// Variables
+	constantList.modifier = Source!VariableModifier#CONST; 	// Constants
+	
+	
+	var varrefs = expressionContents.select(y:Source!VarRef|true).collect(z:Source!VarRef|z.name).asSet();
+	var varexps = expressionContents.select(y:Source!RefExp|true).collect(z:Source!RefExp|z.ref).asSet();
+	printDebug("varrefs '" + varrefs + "'");
+	printDebug("varexps '" + varexps + "'");
+	
+	//ADDED to deal with trigger stop<{ v2 }
+	//////////////////////////////////////-
+	var refexp = new Set(Source!RefExp);
+	
+	if (e.isKindOf(Source!RefExp)){
+	        printDebug("t.end.isKindOf(Source!RefExp) " + e);
+	    	printDebug("t.end " + e.ref);
+	    	refexp.add(e.ref);
+	    	//var newVar = ecoreUtil.copy(e.ref);
+	    	//e.ref = newVar;
+	    	
+	    }
+	////////////////////////////////////////
+	
+	for (v  in (varrefs+varexps+refexp )){
+	  var newVar = ecoreUtil.copy(v);
+	  printDebug("Copying variable '" + v.name + "'");
+	  
+	  // Add it to the new interface created above, either as a pure variable or constant.
+		if (v.modifier == Source!VariableModifier#VAR){
+			variableList.vars.add(newVar);
+			printDebug("Source!VariableModifier#VAR");
+			}
+		else{
+			constantList.vars.add(newVar);
+			printDebug("Source!VariableModifier#CONST");
+			}
+			
+			
+		// Replace all variable references to the old variable declaraiton 'xp.v' => newVar.
+		for (varref in expressionContents.select(x:Source!VarRef|x.name = v)) {
+			varref.name = newVar;
+		}
+		// Update all expression references to the old variable decalration 'xp.v' => newVar.
+		for (refexp in expressionContents.select(x:Source!RefExp|x.ref = v)) {
+			refexp.ref = newVar;
+			printDebug("refexp in expressionContents '" + refexp.ref + "'");
+		}
+		
+		
+		//ADDED to dead with trigger stop<{ v2 }
+		//////////////////////////////////////-
+		if (refexp.size()==1){
+		    printDebug("refexp.size()==1");
+		    e.ref = newVar;
+		}
+		//////////////////////////////////////-
+		
+	}
+
+	
+	/*	
+	// Used variables by this action that need to be redeclared in a
+	// new interface. 
+	for (xp in UsedVars!ExpressionUsedVariables.all.select(p|p.e=e)) {
+			
+		// Create the new variable (declaration).
+		var newVar = ecoreUtil.copy(xp.v);
+			
+		printDebug("Copying variable '" + xp.v.name + "'");
+		// Copy the 'name' and its 'type' fields.
+		//newVar.name = xp.v.name;
+		
+		//newVar.type = ecoreUtil.copy(xp.v.type); // -ls-jar for fat jar.
+		//newVar.modifier = xp.v.modifier; derived
+		
+		// Q: Should the variable/constant be initialized in the interface?
+		//	  Potentially such an initialization could reference other variables
+		//	  or constants declared in the state-machine, the controller, or platform.
+		//
+		//	  With the understanding that such a variable will be initialized by the
+		//	  state-machine, we should not copy the initialization? Otherwise, what
+		//	  how could an initialization in a interface reference variables declared
+		//	  somewhere else?
+		//
+		// newVar.initial = ?
+			
+		// Add it to the new interface created above, either as a pure variable or constant.
+		if (xp.v.modifier == Source!VariableModifier#VAR)
+			variableList.vars.add(newVar);
+		else
+			constantList.vars.add(newVar);
+			
+		// Replace all variable references to the old variable declaraiton 'xp.v' => newVar.
+		for (varref in expressionContents.select(x:Source!VarRef|x.name = xp.v)) {
+			varref.name = newVar;
+		}
+		// Update all expression references to the old variable decalration 'xp.v' => newVar.
+		for (refexp in expressionContents.select(x:Source!RefExp|x.ref = xp.v)) {
+			refexp.ref = newVar;
+		}
+	}
+*/
+	
+	// In principle, we could add empty lists.. but here we make sure not to do so.
+	if (variableList.vars.size > 0) {
+		i.variableList.add(variableList);
+	} else {
+		delete variableList;
+	}
+	
+	if (constantList.vars.size > 0){
+		i.variableList.add(constantList);
+	} else {
+		delete constantList;
+	}
+}
+
+
+
+operation usedClocks(i:Source!Interface,e:Source!Expression){
+ 
+  // Compute all objects of the metamodel that are contained by transitivity in a.
+  var actionContents = e.closure(x|x.eContents());
+  
+  var clocks = actionContents.select(x:Source!ClockReset|true).collect(z:Source!ClockReset|z.clock).asSet();  
+  //printDebug("clocks " + clocks);
+  
+  for (c in clocks){
+      //printDebug("replaceClocks " + c.name);
+      // Create the new clock declaration
+	  var newClock = ecoreUtil.copy(c);
+      //printDebug("newClock " + newClock);    
+      
+      // Replace all clock references
+		for (t in actionContents.select(x:Source!ClockReset|x.clock = c)) {
+		    //printDebug("t.clock " + t.clock);
+			t.clock = newClock;
+			//printDebug("t.clock " + t.clock);
+		}
+		
+		 i.clocks.add(newClock);
+  }
+}
+
+
+operation ctrEvarsModel(stm:Source!StateMachineDef, inputEvents:Set(Source!Event) ){
+
+    //Inputs
+	//We use a HashMap to store the set of control variables (inputs) for each StateMachineDef
+	printDebug("operation ctrEvarsModel ");
+	var mapCtrEvars = new Map(String,Set(Source!Variable));
+	//for (stm in Source!StateMachineDef.all) {
+		//var inputEvents = tool.getValidator().ncInputSet(stm);
+		var ctrEvars = new Set(Source!Variable);
+		for (inp in inputEvents){
+		   //create a new variable
+		   var newVar = createCtrEvars(inp.name);
+		   ctrEvars.add(newVar);
+		}
+		mapCtrEvars.put(stm.name,ctrEvars);
+		printDebug("ctrEvars: " + ctrEvars +  " stm: " + stm.name);
+	//}
+	
+	return mapCtrEvars;
+   }
+   

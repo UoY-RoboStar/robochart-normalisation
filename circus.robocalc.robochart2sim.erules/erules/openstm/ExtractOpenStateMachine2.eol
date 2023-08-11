@@ -1,0 +1,54 @@
+
+import "../common/Common.eol";
+
+var debug = true;
+var debugPrintRuleNames = true;
+var level = 0;
+var previouslevel = 0;
+
+printDebug("Model repository: " + System.context.getModelRepository());
+printDebug("Context: " + System.context);
+
+for (m in System.context.getModelRepository()) {
+	printDebug("m: " + m);
+	for (m2 in m.models) {
+		printDebug("m2: " + m2.name);
+	}
+}
+
+printDebug("NodeContainers in scope:");
+for (nc in Intermediate!StateMachineDef.all()) {
+	printDebug("NC: " + fullName(nc));
+}
+
+
+
+printDebug("In ExtractOpenStateMachine2.eol");
+
+var nc = Intermediate!NodeContainer.all.first();
+
+if (nc <> null) {
+var openSTM = new OpenSTM!RCBasicOpenStateMachine();
+
+printDebug("New RCBasicOpenStateMachine: " + nc);
+		
+//if (debug) {
+//	for (ts in s.transitions) {
+//		printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ")");
+//	}
+//}
+		
+openSTM.transitions = nc.transitions.clone();
+openSTM.nodes = nc.nodes.clone();
+
+printDebug("Moved transitions and nodes to new OpenSTM");
+		
+if (debug) {
+	for (ts in openSTM.transitions) {
+		printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ")");
+	}
+	for (s in openSTM.nodes) {
+		printDebug("Node '" + s + "'");
+	}
+}
+}

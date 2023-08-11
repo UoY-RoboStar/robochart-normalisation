@@ -1,0 +1,98 @@
+	
+operation ignoredPackage(p) {
+	var ignorePackages : Set = Set{"function_toolkit", "sequence_toolkit", "relation_toolkit", "set_toolkit", "core"};
+	
+	return ignorePackages.includes(p.name);
+}
+
+operation fullName(s:RCPackage) {
+	return s.name;
+}
+
+operation fullNameMod(s:RCModule) {
+	return s.name;
+}
+operation fullNameMod(s:NamedElement) {
+	if (s.eContainer() <> null) { return fullNameMod(s.eContainer()) + "_" + s.name; } else { return s.name; }
+}
+
+operation fullNameSmb(s:StateMachineBody) {
+	return s.name;
+}
+operation fullNameSmb(s:NamedElement) {
+	if (s.eContainer() <> null) { return fullNameSmb(s.eContainer()) + "_" + s.name; } else { return s.name; }
+}
+
+operation fullNameSt(s:State) {
+	if (s.eContainer() <> null) { 
+		//printDebug("s.eContainer() <> null " + s.eContainer());
+		return fullNameSt(s.eContainer()) + "_" + s.name; 
+	} 
+	else { return s.name; }
+}
+operation fullNameSt(s:StateMachineBody) {
+	return s.name; 
+}
+
+operation fullNameCtrl(s:ControllerDef) {
+	return s.name;
+}
+operation fullNameCtrl(s:NamedElement) {
+	if (s.eContainer() <> null) { return fullNameCtrl(s.eContainer()) + "_" + s.name; } else { return s.name; }
+}
+
+operation fullName(s:NamedElement) {
+	if (s.eContainer() <> null) { return fullName(s.eContainer()) + "::" + s.name; } else { return s.name; }
+}
+
+// The following operations help to determine the deepeness of 'equivalent()'
+// invocations when printing debug messages. It uses a global variable 'level'
+// that should be incremented/decremented each time 'equivalent()' call is
+// present.
+//
+// QUESTION: Can we tap into profilling provided by Epsilon? Or is it not useful?
+operation printTree(i:Integer) {
+	var str = "";
+	
+	while (i > 0)  {
+		str = str + "·";
+		i = i-1;
+	}
+	return str;
+}
+
+operation printDebug(string) {
+
+	// To ease debugging of rules, we exploit the frame stack
+	// to get the name of the rule that called this operation!
+	var calleeRule = "";
+	
+	// This seems to work for ETL, but I don't know yet how to access the pattern name for EPL.
+	if (debugPrintRuleNames = true) {
+		var ctx = System.context.getFrameStack().getFrames();
+		var secondSelf = ctx.collect(f|f.get("self")).selectOne(c|c.asString().split(" ").size == 5);
+		// In a rule the string will contain '5' elements.. our best bet so far to identify it.
+	
+		if (secondSelf.asString() <> "") {
+			calleeRule = "[" + secondSelf.asString().split(" ").first() + "> ";
+		}
+	}
+	
+	if (debug) { 
+		if (previouslevel < level)
+		{
+			(printTree(level-1)+"└"+calleeRule+string).println();
+		} else {
+			(printTree(level)+"├"+calleeRule+string).println();
+		} 
+		previouslevel = level;
+	}
+}
+
+operation increaseDebug(){
+	level=level+1;
+}
+
+operation decreaseDebug() {
+	level=level-1;
+}
