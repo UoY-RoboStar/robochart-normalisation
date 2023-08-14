@@ -7,11 +7,6 @@ pre {
 	
 }
 
-// We can define operations.
-operation printDebug(string) {
-	if (debug) {(": "+string).println();}
-}
-
 
 pattern split_conditional
 	pkg : Source!RCPackage
@@ -21,34 +16,21 @@ pattern split_conditional
 	match: smb.name.equals(smbP)
 	do { 
 	
-		printDebug("split-conditional RHS->LHS");
-		//printDebug("src node's name" + src);
-		//printDebug("tgt node's name " + tgt);
-		//printDebug("transition's name with g " + tr1);
-		//printDebug("transition's name with not g " + tr2);
-		
 		//Getting the source node
 		var src = smb.nodes.selectOne(s|s.name.equals(srcP));
-		printDebug(" src " + src);
 		//Getting the first transition (with [g])
 		var tr1 = smb.transitions.selectOne(t|t.name.equals(tr1P) and t.source = src);
-		printDebug("tr1 " + tr1);
-	    //Getting the junction that is the target of tr1
+	        //Getting the junction that is the target of tr1
 		var junction1 = smb.nodes.selectOne(j|j=tr1.target);
-		//printDebug("junction1 " + junction1);
 		//Getting the transition whose source is junction1
 		var trThen = smb.transitions.selectOne(t|t.source=junction1);
-	    //printDebug("tr1Then " + trThen);
 	    
-	    //Getting the second transition (with [not g])
+	        //Getting the second transition (with [not g])
 		var tr2 = smb.transitions.selectOne(t|t.name.equals(tr2P));
-		//printDebug("tr2 " + tr2Src);
-	    //Getting the junction that is the target of tr2
+	        //Getting the junction that is the target of tr2
 		var junction2 = smb.nodes.selectOne(j|j=tr2.target);
-		//printDebug("junction2 " + junction2);
 		//Getting the transition whose source is junction2
 		var trElse = smb.transitions.selectOne(t|t.source=junction2);
-	    //printDebug("trElse " + trElse);
 	    
 	    //Creating the IfStmt
 	    var ifStmt = new Source!IfStmt();
@@ -57,14 +39,13 @@ pattern split_conditional
 	    ifStmt.`else` = trElse.action;
 	    
 	    //Getting the target node
-		var tgtNode = smb.nodes.selectOne(s|s.name.equals(tgtP));
-		//printDebug(" tgtNode " + tgtNode);
+	    var tgtNode = smb.nodes.selectOne(s|s.name.equals(tgtP));
 	    //Updating the target of the first transition
 	    tr1.target = tgtNode;
 	    //Updating the action of the first transition
 	    tr1.action = ifStmt;
 	    
-	    //Removing the junctions junction1 and junction2, and the transitions out of it
+	    //Removing the junctions junction1 and junction2 and the transitions
 	    smb.nodes.remove(junction1);
 	    smb.nodes.remove(junction2);
 	    smb.transitions.remove(trThen);
