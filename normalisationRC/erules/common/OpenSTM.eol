@@ -1,0 +1,66 @@
+import "Common.eol";
+
+operation printTree(i:Integer) {
+	var str = "";
+	
+	while (i > 0)  {
+		str = str + " ";
+		i = i-1;
+	}
+	return str;
+}
+
+operation printNodeContainer(i:Integer,o:NodeContainer) {
+
+	if (o.isKindOf(State)) {
+		printDebug(printTree(i-1) + " OPENSTM state: " + o.name + "");
+	} 
+	for (n : Transition in o.transitions) {
+		printDebug(printTree(i) + " OPENSTM transition: " + n.name + " : " 
+		+ n.source.name + " -> " + n.target.name + " with trigger " + n.trigger + " on action " + n.action);
+	}
+	for (n : Node in o.nodes) {
+		printNodeContainer(i+1,n);
+	}
+	printDebug(" OPENSTM " + o);
+}
+
+operation printNodeContainer(i:Integer,o:Initial) {
+	printDebug(printTree(i) + "initial: " + o.name + "");
+}
+
+operation printNodeContainer(i:Integer,o:Junction) {
+	printDebug(printTree(i-1) + "junction: " + o.name + "");
+}
+
+
+operation printOpenSTM(i:Integer,o:BasicOpenStateMachine) {
+
+	// Print nodes / transitions
+	printDebug("BasicOSTM");
+	printDebug(printTree(i) + "////////[" + o.getOwningModel().getTypeOf(o) + "]////////////////////////-");
+	printNodeContainer(i,o);
+	printDebug(printTree(i) + "//////////////////////////////////////////");
+}
+
+operation printOpenSTM(i:Integer,o:SeqOpenStateMachine) {
+	
+	printDebug("SeqOSTM");
+	printDebug(printTree(i) + "[" + o.getOwningModel().getTypeOf(o) + "]");
+	printDebug(printTree(i) + "left:");
+	printOpenSTM(i+1,o.left);
+	printDebug(printTree(i) + "right:");
+	printOpenSTM(i+1,o.right);
+	
+}
+
+operation fullNameEState(s:EState) {
+	return s.name;
+}
+operation fullNameEState(s:NamedElement) {
+	if (s.eContainer() <> null) { return fullNameEState(s.eContainer()) + "_" + s.name; } else { return s.name; }
+}
+
+operation nodesEState(st : Source!EState){
+  return st.closure(x:Source!NodeContainer|x.nodes.selectByKind(Source!NodeContainer));
+}

@@ -1,0 +1,299 @@
+<!-- This file contains the complete sequence of steps for transformations
+	 for a specific project. -->
+<project default="RunDefault">
+
+	<property name="erules" value="platform:/resource/normalisationRC/erules"/>
+	<property name="maxloops" value="20"/>
+
+	<macrodef name="transform">
+		<attribute name="Project"/>
+		<attribute name="InputRCT"/>
+		<attribute name="RoboChartModule"/>
+		<attribute name="mainPkg"/>
+		<sequential>
+			<!-- NOTE: Epsilon's default BuildListener for ANT is not able to listen to
+					   events from subbuilds in ANT. Therefore, it could not clean up
+					   automatically upon reaching the end of a build, particularly in
+					   case an exception was thrown. I've implemented a custom build
+					   listener that does this. -->
+			<antcall target="Translate"> 
+				<!-- The URI of the Project as loaded in Eclipse. -->
+				<param name="Project" value="@{Project}" />
+				<!-- The name of the .rct file relative to InputProject. -->
+				<param name="InputRCT" value="@{InputRCT}"/>
+				<!-- The name of the RoboChart module to be transformed. -->
+				<param name="RoboChartModule" value="@{RoboChartModule}" />
+				<!-- The name of the RoboChart main package. -->
+				<param name="RoboChartMainPackage" value="@{mainPkg}" />
+			</antcall>
+		</sequential>
+	</macrodef>
+
+	<target name="RunDefault">
+
+		<!-- To avoid avoid with repeated runs, we construct a uniquely identified output folder
+			 using ANT's built-in property build.numer. -->
+		<buildnumber/>
+		<transform inputrct="main.rct" project="platform:/resource/erules-example-0/" robochartmodule="M" mainPkg="main"/>
+
+	</target>
+
+	<!-- This is the overall high-level task for translating a RoboChart module to
+		 a RoboSim module. -->
+	<target name="Translate">
+
+		<!-- The OutputFolder property is then set as follows. -->
+		<property name="OutputFolder" value="${Project}normalForm/${build.number}/"/>
+		<property name="OutputPackage" value="pkg${build.number}"/>
+		<property name="OutputRCT" value="${OutputFolder}${InputRCT}"/>
+		<property name="mainPkgRCT" value="${OutputPackage}_${RoboChartMainPackage}"/>
+
+		<sequential>
+			<echo>Project: ${Project}</echo>
+			<echo>InputRCT: ${InputRCT}</echo>
+			<echo>RoboChartModule: ${RoboChartModule}</echo>
+			<echo>OutputFolder: ${OutputFolder}</echo>
+			<echo>OutputPackagePrefix: ${OutputPackage}</echo>
+			<echo>Build number: ${build.number}</echo>
+			<echo>mainPkgRCT: ${mainPkgRCT}</echo>
+
+			<!-- The original .rct file is loaded into a model of name 'Original'.
+				
+				 Note: 1) The parameter 'expand=true' ensures that the model and any
+				 	   dependencies are resolved. For example, if the model references
+				 	   elements in other files, these will also be loaded into context
+				 	   automatically.
+				 	   
+				 	   2) This model is not changed on disk as 'store=false'.
+			 -->
+			
+			<!-- I've replaced the epsilon.emfModel.load task with a custom task below,
+				 which does much of the same, but importantly, it resolves all proxies
+				 correctly, which Epsilon doesn't. This is required to ensure all 
+				 cross-referenced resources are fully loaded into context. 
+				 
+				 WARNING: cache should be set to 'false', as there are issues with resolving
+				 		  proxies somewhat after the model is created internally. A few hours
+				 		  were wasted on this, so beware. 
+			-->
+			<robochart2sim.load name="Original"
+				modeluri="${Project}${InputRCT}"
+				metamodeluri="http://www.robocalc.circus/RoboChart"
+				read="true" store="false" expand="true" failonerrors="true" cached="false" />
+			
+
+			<!-- For cloning the RoboChart module, we need an in-memory model,
+				 which we call 'Clone'. -->
+			
+			<!--<epsilon.emf.loadModel name="Clone"
+				modeluri="${OutputFolder}${InputRCT}"
+				metamodeluri="http://www.robocalc.circus/RoboChart"
+				read="false" store="false" failonerrors="true" cached="false" />-->
+			
+			<!-- I've replaced the previous invocation of epsilon.emf.loadModel with
+				 a custom task below 'robochart2sim.createModel'.
+				 
+				 This task internally creates a InMemoryEmfModel that is instantiated
+				 with an empty Resource, given the specified 'modeluri', created from
+				 an XtextResourceSet. Furthermore, the metamodeluri is also required
+				 to ensure correct instantiation of the EPackage registry internally.
+				 
+				 Note that this makes the task specific to Xtext. 
+				 
+				 WARNING: 'cache' must be set to false due to issues with moving elements
+				 		  between resources in the same ResourceSet and Epsilon's cache. -->
+			<robochart2sim.createModel 
+				name="Clone" 
+				modeluri="${OutputFolder}${InputRCT}" 
+				caching="false" 
+				metamodeluri="http://www.robocalc.circus/C2S"/>
+			
+			<!-- The following ETL program clones the specified 'robochartmodule',
+				 by cloning the contents of any packages referenced transitively
+				 and adds the resulting cloned resources to the model named Clone.
+				 
+				 To save each newly created RCPackage in its own file, we need to
+				 pass the OutputFolder as a parameter to the ETL program. The idea
+				 here is to write any RCPackages to the output folder that
+				 correspond to RCPackages in the Original model who are required,
+				 transitively, by the specified module. For example, if a RoboChart
+				 module 'M' in a file 'A.rct' references controllers or state-machines
+				 in a file 'B.rct', then after this program runs, we would have the 
+				 following generated files:
+				 
+				 project/A.rct -> project/out/A.rct 
+				 project/B.rct -> project/out/B.rct
+				 
+				 Each such package would be uniquely named using the buildnumber that
+				 is also passed as a parameter via 'clonepackagename' below.
+				 
+				 Note: 1) As a result of this transformation a model of name 'Clone'
+				 	 	will be in context and can be used by subsequent ETL/EPL programs
+				 	 	without having to read/write files again.
+				-->
+
+			<!-- ==================================================================================================
+				 Clone modules, and any packages on which they depend, except for datatypes/functions.
+				 ================================================================================================== -->
+			
+			<epsilon.etl uri="${erules}/packages/CloneModule.etl" failonerrors="true">
+				<parameter name="projecturi" value="${Project}"/>
+				<!-- We pass the output folder (a URI) to the transformation
+					 as a parameter, so that the cloned .rct files can be written
+					 to disk. -->
+				<parameter name="outputfolder" value="${OutputFolder}robochart/"/>
+				<!-- The name of the module to be cloned. -->
+				<parameter name="robochartmodule" value="${RoboChartModule}"/>
+				<!-- A unique name to serve as prefixing for any new declared packages. -->
+				<parameter name="clonepackagename" value="${OutputPackage}"/>
+				<model ref="Original"/>
+				<model ref="Clone"/>
+			</epsilon.etl>
+
+			<!-- Saving of models needs to be done explicitly due to the multiple files
+				 (resources in EMF terminology). The following EOL program takes an output
+				 folder as a parameter, that restricts, saving to resources in that folder,
+				 from models in context (in this case Clone). -->
+			<epsilon.eol uri="${erules}/common/SaveAll.eol">
+				<parameter name="outputfolder" value="${OutputFolder}"/>
+				<model ref="Clone"/>
+			</epsilon.eol>
+			
+			<!-- ==================================================================================================
+				 procedure normSMB().
+			================================================================================================== -->
+		
+							
+			 		<epsilon.epl uri="${erules}/normalisation/procedures/normSMB/Step2.epl" repeatwhilematches="true">
+							<model ref="Clone" as="Source"/>
+							<parameter name="clonepackagename" value="${OutputPackage}"/>
+				             <parameter name="mainPkgRCT" value="${mainPkgRCT}"/>
+						</epsilon.epl> 
+			
+						<epsilon.epl uri="${erules}/normalisation/procedures/normSMB/Step3.epl" repeatwhilematches="false">
+							<model ref="Clone" as="Source"/>
+							<parameter name="clonepackagename" value="${OutputPackage}"/>
+							  <parameter name="mainPkgRCT" value="${mainPkgRCT}"/>
+						</epsilon.epl>
+					
+				
+						<epsilon.epl uri="${erules}/normalisation/procedures/normSMB/Step4.epl" repeatwhilematches="false">
+							<model ref="Clone" as="Source"/>
+							<parameter name="mainPkgRCT" value="${mainPkgRCT}"/>
+							<parameter name="clonepackagename" value="${OutputPackage}"/>
+						</epsilon.epl> 	
+			
+			<epsilon.epl uri="${erules}/normalisation/procedures/normSMB/Step5.epl" repeatwhilematches="true">
+									<model ref="Clone" as="Source"/>
+									<parameter name="clonepackagename" value="${OutputPackage}"/>
+								</epsilon.epl>
+			  
+			<epsilon.epl uri="${erules}/normalisation/procedures/normAO/Step3.epl" repeatwhilematches="false">
+							<model ref="Clone" as="Source"/>
+							<parameter name="clonepackagename" value="${OutputPackage}"/>
+				 <parameter name="mainPkgRCT" value="${mainPkgRCT}"/>
+						</epsilon.epl> 
+						
+			<epsilon.epl uri="${erules}/normalisation/procedures/normAO/Step4.epl" repeatwhilematches="false">
+							<model ref="Clone" as="Source"/>
+							<parameter name="clonepackagename" value="${OutputPackage}"/>
+				 <parameter name="mainPkgRCT" value="${mainPkgRCT}"/>
+						</epsilon.epl> 
+						 
+			
+						<epsilon.epl uri="${erules}/normalisation/procedures/normAO/Step5.epl" repeatwhilematches="true">
+							<model ref="Clone" as="Source"/>
+							<parameter name="clonepackagename" value="${OutputPackage}"/>
+							<parameter name="mainPkgRCT" value="${mainPkgRCT}"/>
+						</epsilon.epl>
+			
+						<epsilon.epl uri="${erules}/normalisation/procedures/normAO/Step6.epl" repeatwhilematches="true">
+							<model ref="Clone" as="Source"/>
+							<parameter name="clonepackagename" value="${OutputPackage}"/>
+						</epsilon.epl>
+						
+				
+
+
+			<!-- The following EOL program writes resources to disk. We pass the output folder
+				 as a parameter, since there may be other resources in context (namely RoboChart
+				 core libraries) that should not be saved. -->
+			<epsilon.eol uri="${erules}/common/SaveAll.eol"> 
+				<parameter name="outputfolder" value="${OutputFolder}"/>
+				<model ref="Clone"/>
+			</epsilon.eol> 
+			
+			<echo level="info">Model cloned and written to disk.</echo>
+			
+			<!-- TODO: remove the following task -->
+			<robochart2sim.anthelper />
+	
+			
+			 
+
+			<epsilon.disposeModels />
+			<echo level="info">Disposed and finished..</echo>
+		</sequential>
+	</target>
+
+	<!-- The following task defines the normalisation strategy over
+		 OpenStateMachines.
+	
+		 NOTE: Extraction of OpenStateMachines itself has been moved into the RC2RS.etl
+		 	   program, due to the need to project each OpenSTM individually. Otherwise
+		 	   it would be difficult to ensure that a single Epsilon model would contain
+		 	   just one OpenStateMachine at a time. -->
+	<target name="NormaliseOpenSTM">
+		<sequential>
+		<echo>Executing NormaliseOpenSTM</echo>
+
+		<!-- The following custom task 'robochart2sim.register' is required to
+			 appropriately register a BuildFinishedListener for ANT that disposes 
+			 of models when the build finishes, or when there is an exception.
+			 
+			 The reason this is necessary and above to other Epsilon tasks, is
+			 that when this target is called with a fresh repository, any
+			 invocation of Epsilon tasks' will inherit the model repository
+			 and will NOT setup a BuildFinishedListener, potentially messing
+			 up models in memory further than what we already expect. -->
+		<robochart2sim.register disposealways="false" />
+			
+
+		<!-- Apply Rules that introduce EState/EJunction/EFinal/EInitial for each corresponding
+			 element of RoboChart, so as to allow recording whether a node is an 'entrypoint'. -->
+		
+			<!--<epsilon.disposeModel model="Intermediate" />  -->
+		<epsilon.epl uri="${erules}/openstm/CreateEntryPoints.epl" repeatwhilematches="true" moduleimplementation="org.eclipse.epsilon.epl.EplModule">
+			<model ref="OpenSTM"/>
+		</epsilon.epl>
+
+	
+		<!-- ==================================================================================================
+			 Introduce Composition 
+			 ================================================================================================== -->
+
+		<!-- Apply Rule IntroduceCompositionFromInitialState -->
+		<echo>Execute IntroduceCompositionFromInitialState</echo>	
+		<epsilon.epl uri="${erules}/openstm/IntroduceCompositionFromInitialState.epl" repeatwhilematches="true" moduleimplementation="org.eclipse.epsilon.epl.EplModule" maxloops="${maxloops}">
+			<model ref="OpenSTM" />
+		</epsilon.epl> 
+		<!-- Apply Rule IntroduceCompositionFromSetsOfState -->
+		<echo>Execute IntroduceCompositionFromSetsOfStates1</echo>
+		<epsilon.epl uri="${erules}/openstm/IntroduceCompositionFromSetsOfStates1.epl" repeatwhilematches="true" moduleimplementation="org.eclipse.epsilon.epl.EplModule" maxloops="${maxloops}">
+			<model ref="OpenSTM" />
+		</epsilon.epl> 
+			
+		<!-- Disabled raw printing of the OpenSTM for now...
+		<echo>Execute PrintOpenSTM</echo>	
+		<epsilon.eol uri="${erules}/openstm/PrintOpenSTM.eol">
+			<model ref="OpenSTM" />
+		</epsilon.eol> -->
+		<echo>Executed NormaliseOpenSTM</echo>
+		</sequential>
+	</target>
+
+	
+	
+	
+	
+</project>

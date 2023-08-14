@@ -1,0 +1,2039 @@
+import "../../../common/RoboChart.eol";  
+import "../../../common/Common.eol";
+// Initialization of variables, for example, before transformation.
+pre {
+	// Controls whether debug information is printed.
+	var debug = true;
+	var emfTool = new Native("org.eclipse.epsilon.emc.emf.tools.EmfTool");
+	var ecoreUtil = emfTool.ecoreUtil;
+	
+	var currentStmt = Source!Action;
+	//operations
+	var usedOpSig = new Set(Source!OperationSig);
+	//var usedOpsNames = new Set(String);
+	//clocks
+	var usedClocksNames = new Set(String);
+	
+	//variables
+	var usedVarsNames;
+	var usedVarsEvParameters = new Set(Source!VariableList); 
+	var usedVarsParameters; 
+	var usedVarsParametersCl;
+
+	//events
+	var usedEvsNames = new Set(String);
+	
+	//Original solftware operations
+	var origSoftOps = collectSoftwareOperations();
+}
+
+/*
+operation usedPars(smb:Source!OperationDef,s:Source!Action){
+
+        var usedPars = new Set(Source!Parameter);
+		if (smb.isTypeOf(Source!OperationDef) and smb.parameters<>null){
+		   var statementContents = s.closure(x|x.eContents());
+		   var varexps = statementContents.select(y:Source!RefExp|y.ref.isTypeOf(Source!Parameter)).collect(z:Source!RefExp|z.ref).asSet();
+		   printDebug("varexps parameters" + varexps);
+		   
+		   
+		   for (p in smb.parameters){
+		     var newPar = ecoreUtil.copy(p);
+		     //OpS.parameters.add(newPar);
+		     
+		     for (refexp in statementContents.select(x:Source!RefExp|x.ref = p)) {
+				refexp.ref = newPar;
+				usedPars.add(newPar);
+				printDebug(" refexp newVar " + newPar);
+			}
+		   
+		   }
+
+		}
+		return usedPars;
+}
+*/
+
+operation usedVars(s:Source!Action) {
+
+    usedVarsNames = new Set(String);
+    usedVarsParameters = new Set(Source!Parameter);
+    usedVarsParametersCl = new Set(Source!Parameter);
+    var usedVarList = new Set(Source!VariableList);
+	
+	// Compute all objects of the metamodel that are contained by transitivity in s.
+	var statementContents = s.closure(x|x.eContents());
+	
+	// We calculate two sets, the variables in a 'VarRef' and those in a 'RefExp'.
+	var varrefs = statementContents.select(y:Source!VarRef|true).collect(z:Source!VarRef|z.name).asSet();
+	var varexps = statementContents.select(y:Source!RefExp|not(y.ref.isTypeOf(Source!Function))).collect(z:Source!RefExp|z.ref).asSet();
+	var commInput = statementContents.select(x:Source!Communication|x._type == CommunicationType#INPUT).collect(z:Source!Communication|z).asSet();
+	// An Interface is a BasicContext, which can have sequences of VariableList elements,
+	// so we create a new VariableList and add this to the sequence.
+	
+	//Parameters
+	var parexps = statementContents.select(y:Source!RefExp|y.ref.isTypeOf(Source!Parameter)).collect(z:Source!RefExp|z.ref).asSet();
+	printDebug(" parexps " + parexps);	  
+	
+	var variableList = new Source!VariableList();
+	var constantList = new Source!VariableList();
+	
+	variableList.modifier = Source!VariableModifier#VAR;	// Variables
+	constantList.modifier = Source!VariableModifier#CONST; 	// Constants
+	
+	//It is used to store the parameters (variables) of a input communication 
+	var varsCommInput = new Set(Source!Variable);
+	if (commInput.notEmpty()){
+	    for (inp in commInput){
+	        //printDebug(" s.communication.parameter " + inp.parameter);
+	        varsCommInput.add(inp.parameter);
+		    //printDebug("varsCommInput " + varsCommInput);     
+	    }  
+	}		
+	   
+	for (v in (varrefs+varexps+varsCommInput+parexps)){ 
+	       
+	       
+	       if (v.isTypeOf(Source!Parameter)){
+	         var newPar = ecoreUtil.copy(v);
+	         usedVarsParameters.add(v);
+	         usedVarsParametersCl.add(newPar);
+	         for (refexp in statementContents.select(x:Source!RefExp|x.ref = v)) {
+				refexp.ref = newPar;
+				printDebug(" v.isTypeOf(Source!Parameter) " + refexp.ref + "" + refexp);
+			}
+	         
+	       } 
+	         
+	       else { 
+	       
+	       var newVar = ecoreUtil.copy(v);
+	       printDebug(" newVar " + newVar);
+	       usedVarsNames.add(newVar.name);
+	       
+	       if (v.modifier == Source!VariableModifier#VAR){
+			variableList.vars.add(newVar);
+			//printDebug(" v.modifier == Source!VariableModifier#VAR ");
+			}
+		   else{
+			constantList.vars.add(newVar);
+			//printDebug(" v.modifier == const ");
+			}	       
+			
+	        // Update all variable references to the old variable declaration 'v' => newVar.
+			for (varref in statementContents.select(x:Source!VarRef|x.name = v)) {
+				varref.name = newVar;
+				//printDebug(" newVar " + newVar);
+			}
+			// Update all expression references to the old variable declaration 'v' => newVar.
+			for (refexp in statementContents.select(x:Source!RefExp|x.ref = v)) {
+				refexp.ref = newVar;
+				//printDebug(" refexp newVar " + newVar);
+			}
+			for (commInput in statementContents.select(x:Source!Communication|x._type == CommunicationType#INPUT
+			        and x.parameter = v)) {
+			          commInput.parameter = newVar;
+		    }
+			}
+		
+	    }
+	    
+	 // In principle, we could add empty lists.. but here we make sure not to do so.
+	if (variableList.vars.size > 0) {
+		usedVarList.add(variableList);
+	} else {
+		delete variableList;
+	}
+	
+	if (constantList.vars.size > 0){
+		usedVarList.add(constantList);
+	} else {
+		delete constantList;
+	}
+	
+	printDebug(" usedVarList " + usedVarList);
+	return usedVarList;
+}
+
+operation usedOps(s:Source!Action) {
+
+    var usedOps = new Set(Source!OperationSig);
+    usedOpSig = new Set(Source!OperationSig);
+    //usedOpsNames = new Set(String);
+    //usedOpsNames = new Set(String);
+	// Compute all objects of the metamodel that are contained by transitivity in s.
+	var statementContents = s.closure(x|x.eContents());
+	var contents = statementContents.select(y:Source!Call|true).collect(z:Source!Call|z.`operation`).asSet();
+	
+	for (op in contents){
+	    
+		var newOpSig = ecoreUtil.copy(op);
+        	
+		for (stmt in statementContents.select(x:Source!Call|x.`operation` = op)) {
+			stmt.`operation` = newOpSig;
+		}
+		//Adding newOpSig into the Interface
+		usedOps.add(newOpSig);
+		usedOpSig.add(newOpSig);
+		//usedOpsNames.add(newOpSig.name);
+		
+      } 
+   return usedOps;
+       
+}
+
+operation usedClocks(s:Source!Action){
+
+  var usedClocks = new Set(Source!Clock);
+  usedClocksNames = new Set(String);
+  
+  // Compute all objects of the metamodel that are contained by transitivity in s.
+  var statementContents = s.closure(x|x.eContents());
+  var contents = statementContents.select(x:Source!ClockReset|true).collect(z:Source!ClockReset|z.clock).asSet();  
+  
+  for (c in contents){
+      // Create the new clock declaration
+	  var newClock = ecoreUtil.copy(c);   
+      // Replace all clock references
+		for (stmt in statementContents.select(x:Source!ClockReset|x.clock = c)) {
+		    //printDebug("t.clock " + t.clock);
+			stmt.clock = newClock;
+		}
+		
+	  usedClocks.add(newClock);
+	  usedClocksNames.add(newClock.name);
+  }
+  
+  if (s.isKindOf(Source!ClockReset)){
+     printDebug("s.isKindOf(Source!ClockReset) " + s.clock.name);
+     var newClock = ecoreUtil.copy(s.clock);
+     s.clock = newClock;
+     usedClocks.add(newClock);
+     usedClocksNames.add(newClock.name);
+  }
+  
+  return usedClocks;
+}
+
+operation usedEvents(s:Source!Action) {
+	
+	var usedEvents = new Set(Source!Event);
+	usedEvsNames = new Set(String);
+	// Compute all objects of the metamodel that are contained by transitivity in s.
+	var statementContents = s.closure(x|x.eContents());
+	var contents = statementContents.select(x:Source!Communication|true).collect(z:Source!Communication|z.event).asSet();
+    printDebug("contents " + contents);
+    var contentsComm = statementContents.select(x:Source!Communication|true).collect(z:Source!Communication|z).asSet();
+    printDebug("contentsComm " + contentsComm);
+    
+    for (ev in contents) {
+        //printDebug("ev " + ev);
+        
+        var newEvent = ecoreUtil.copy(ev);
+		//printDebug("newEvent " + newEvent);
+		for (stmt in statementContents.select(x:Source!Communication|x.event = ev)) {
+			stmt.event = newEvent;
+		}	
+
+		usedEvents.add(newEvent);
+		usedEvsNames.add(newEvent.name);
+    }
+   printDebug(" usedEvents " + usedEvents); 
+   return usedEvents;
+	
+}
+
+operation reqVarsOps(s:Source!Action) {
+
+    var variableList = new Source!VariableList();
+	var constantList = new Source!VariableList();
+	
+	variableList.modifier = Source!VariableModifier#VAR;	// Variables
+	constantList.modifier = Source!VariableModifier#CONST; 	// Constants
+	
+    var reqVarsOps = new Set(Source!VariableList);
+   
+    var softOpNames = collectSoftwareOperationsName();
+    var softOps = collectSoftwareOperations();
+   
+    for(op in usedOpSig){
+          if (softOpNames.includes(op.name)){
+            var operationDef = softOps.selectOne(opDef:Source!OperationDef|opDef.name.equals(op.name));
+            printDebug(" operationDef " + operationDef);          
+            var reqInterfaces = operationDef.rInterfaces.select(i|i.variableList.size()>0).asSet();
+            for (r in reqInterfaces){ 
+		      	for (vl in r.variableList){
+		      	  for (v in vl.vars){
+		      	  	if (not usedVarsNames.includes(v.name)){
+		      	    	printDebug("usedVarsNames.includes(v.name) " + v.name);
+		      	    	var newVar = ecoreUtil.copy(v);
+		      	    	if (v.modifier == Source!VariableModifier#VAR)
+							variableList.vars.add(newVar);
+		   	            else
+							constantList.vars.add(newVar);	 
+		      	    	usedVarsNames.add(newVar.name);
+		          }
+		        } 
+		 
+		      }
+       
+          }
+           // In principle, we could add empty lists.. but here we make sure not to do so.
+			if (variableList.vars.size > 0) {
+				reqVarsOps.add(variableList);
+			} else {
+				delete variableList;
+			}
+	
+			if (constantList.vars.size > 0){
+				reqVarsOps.add(constantList);
+			} else {
+				delete constantList;
+			}
+       }
+    
+   }
+   return reqVarsOps;
+       
+}
+
+
+operation reqClocksOps(s:Source!Action) {
+
+    var reqClocksOpS = new Set(Source!Clock);
+    var softOps = collectSoftwareOperations();
+    var softOpNames = collectSoftwareOperationsName();
+    //printDebug("In reqClocksOps: softOpNames " + softOpNames);
+    //printDebug("In reqClocksOps: usedOpSig " + usedOpSig);
+    for(op in usedOpSig){
+          if (softOpNames.includes(op.name)){
+            var operationDef = softOps.selectOne(opDef:Source!OperationDef|opDef.name.equals(op.name));          
+            var reqInterfaces = operationDef.rInterfaces.select(i|i.clocks.size()>0).asSet();
+               for (r in reqInterfaces){                
+       		      	for (cl in r.clocks){
+    		      	  	if (not usedClocksNames.includes(cl.name)){
+  		      	  	    	var newClk = ecoreUtil.copy(cl);
+		      	        	reqClocksOpS.add(newClk);
+		      	        	usedClocksNames.add(newClk.name);
+    		          }
+  		             
+		        } 
+ 		      
+			}
+         
+       }
+    
+   }
+   return reqClocksOpS;
+       
+}
+
+operation defEvOps(s:Source!Action) {
+	
+    var defEvOps = new Set(Source!Event);
+    var softOps = collectSoftwareOperations();
+    var softOpNames = collectSoftwareOperationsName();
+   
+     for(op in usedOpSig){
+          if (softOpNames.includes(op.name)){
+            var operationDef = softOps.selectOne(opDef:Source!OperationDef|opDef.name.equals(op.name));  
+            var interfaces = operationDef.interfaces.select(i|i.events.size()>0).asSet();
+               for (i in interfaces){                
+       		      	for (ev in i.events){
+    		      	  	if (not usedEvsNames.includes(ev.name)){
+  		      	  	      var newEv = ecoreUtil.copy(ev);
+		      	          defEvOps.add(newEv);
+		      	          usedEvsNames.add(newEv.name);
+    		          }
+		        } 	      
+			}
+			for (ev in operationDef.events){
+			//printDebug(" local ev " + ev.name);
+			   if (not usedEvsNames.includes(ev.name)){
+  		      	  	  var newEv = ecoreUtil.copy(ev);
+		      	      defEvOps.add(newEv);
+		      	      usedEvsNames.add(newEv.name);
+    		    }
+			
+			}
+       }
+    
+   }
+   return defEvOps;
+}
+
+
+
+
+pattern intro_call_for_act_state
+	pkg : Source!RCPackage,
+		//guard: pkg.name.asString().startsWith(clonepackagename),
+	smb : Source!StateMachineBody
+		from: smbs(pkg) + origSoftOps,//pkg.machines + pkg.operations,
+	S 	: Source!State	
+		// One of the states of smb
+		from: nodesSmb(smb),
+	s 	: Source!Action
+		// One of its actions
+		from: S.actions 
+     {
+			// When the action is not an operation call
+			match: not s.action.isTypeOf(Source!Call)
+	do {
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		printDebug("********************************");
+		printDebug("Begin - intro_call_for_act_state ");
+		printDebug("machine: " + smb.name + " state: " + S.name + " S.ACTION " + s.action);
+		printDebug("fulName(S) " + fullNameSmb(S));
+		//printDebug("fulName(s) " + fullName(s));
+		// Create interfaces to hold new declarations for variables/operations/events used by this action.
+		var req_s 	= new Source!Interface();
+		var defEvents_s	= new Source!Interface();
+		
+		if (smb.name.startsWith("normal_")){
+			req_s.name 	= "req_" + fullNameSmb(S) + "_" + actionName(s); //setName(smb,S,s);
+			defEvents_s.name 	= "defEvents_" + fullNameSmb(S) + "_" + actionName(s);//+ setName(smb,S,s);
+		} 
+		else{
+			req_s.name 	= "req_normal_" +  fullNameSmb(S) + "_" + actionName(s);//setName(smb,S,s);
+			defEvents_s.name 	= "defEvents_normal_" +  fullNameSmb(S) + "_" + actionName(s);//setName(smb,S,s);
+		}
+		
+		
+		usedVarsNames = new Set(String);
+		//Capturing the variables used by s
+		var usedVars = usedVars(s);	
+		/*Capturing the (software and platform) operations used by s
+		  and for each software operation (IOpS) in usedOps, 
+		  we need to compute its required variables and clocks required by op, and theirs defined events
+        */
+		var usedOps = usedOps(s);		
+		var usedClocks = usedClocks(s);		
+		var reqVarsOps = reqVarsOps(s);		
+		var reqClocksOps = reqClocksOps(s);		
+		var usedEvents = usedEvents(s);		
+		var defEvOps = defEvOps(s);
+		
+		if (usedVars.notEmpty()) {req_s.variableList.addAll(usedVars); }
+		if (usedOps.notEmpty()) {req_s.operations.addAll(usedOps); }
+		if (usedClocks.notEmpty()) {req_s.clocks.addAll(usedClocks); }
+		if (reqVarsOps.notEmpty()) { req_s.variableList.addAll(reqVarsOps); }
+		if (reqClocksOps.notEmpty()) {req_s.clocks.addAll(reqClocksOps); }
+		if (usedEvents.notEmpty()){defEvents_s.events.addAll(usedEvents);}
+		if (usedVarsEvParameters.notEmpty()){req_s.variableList.addAll(usedVarsEvParameters);}
+		if (defEvOps.notEmpty()){defEvents_s.events.addAll(defEvOps); }
+		
+		////////////////////////////////////////////////////////////////////////////////////////////////-		
+		// Creating the new operation
+		var OpS 	= new Source!OperationDef();
+		if (smb.name.startsWith("normal"))
+			OpS.name = fullNameSmb(S) + "_" + actionName(s);//setName(smb,S,s);
+		else 
+			OpS.name = "normal_" + fullNameSmb(S) + "_" + actionName(s);
+		
+		// The operation has an Initial junction and a Final state.
+		var OpS_I 	= new Source!Initial();
+		OpS_I.name	= "i";
+		var OpS_F 	= new Source!Final();
+		OpS_F.name 	= "f";
+		
+		// It has a single transition (OpS_tr) from OpS_I to OpS_F
+		var OpS_tr = new Source!Transition();
+		OpS_tr.name	  = "t";
+		OpS_tr.source = OpS_I;
+		OpS_tr.target = OpS_F;
+		OpS_tr.action = s.action;
+						
+		//Adding OpS_I and OpS_F to the set of nodes of OpS
+		OpS.nodes.addAll(Set{OpS_I,OpS_F});
+		//Adding OpS_tr to the set of transitions ofOpS
+		OpS.transitions.add(OpS_tr);
+		
+		
+		//Dealing with parameters
+		//var usedPars = usedPars(s);
+		var seqPars = new Sequence(Sorce!Parameter);
+		var seqParsOpSig = new Sequence(Sorce!Parameter);
+		if(usedVarsParametersCl.notEmpty()){
+		  
+		  for (p in smb.parameters){
+		     for (np in usedVarsParametersCl){
+		       if (p.name.equals(np.name)){
+		         var parOpSig = ecoreUtil.copy(np);
+		         seqPars.add(np);
+		         seqParsOpSig.add(parOpSig);
+		         //printDebug("p.name.equals(np.name) " + np + " " + np.name + " " + np.type );
+		       }
+		     }
+		  }
+		
+		   OpS.parameters.addAll(seqPars);
+		   //printDebug("OpS.parameters " + OpS.parameters);
+		}
+		
+		//Adding a new signature for OpS
+		var OpSig 	= new Source!OperationSig();
+		OpSig.name 	= OpS.name;
+		//Adding the parameters for OpSig
+		if(usedVarsParametersCl.notEmpty()){
+		   OpSig.parameters.addAll(seqParsOpSig);
+		}
+
+		// Declaring an interface that contains OpS		
+		var IOpS = new Source!Interface();
+		IOpS.name = "I_" + OpS.name;
+		IOpS.operations.add(OpSig);
+		
+		// Delete the required and defined interfaces of OpS if they are empty.
+		// otherwise, we make them required by OpS,
+		// and introduce them in the package
+		if (req_s.variableList.notEmpty() or req_s.operations.notEmpty() or req_s.clocks.notEmpty()){
+		   OpS.rInterfaces.add(req_s);
+		   pkg.interfaces.add(req_s);
+       }
+		else 
+		   delete req_s;
+		
+		if (defEvents_s.events.notEmpty()){
+		   OpS.interfaces.add(defEvents_s);
+		   pkg.interfaces.add(defEvents_s); 
+		}
+		else
+		   delete defEvents_s;
+		
+		//Add OperationDef to current package.
+		pkg.operations.add(OpS);
+		// Add interface to current package.
+		pkg.interfaces.add(IOpS);
+		// Make this interface required by smb.
+		smb.rInterfaces.add(IOpS);
+		
+		printDebug(" s depois da atribuição " + s.action + " E s " + s);
+		var defEvOps = defEvOps(s);
+		
+		// Introduce a Call to the newly defined operation OpS.
+		var OpSCall = new Source!Call();
+		OpSCall.`operation` = OpSig;
+		s.action = OpSCall;
+		//This call may have arguments, so we need to create a new RefExp for each one of them
+		if (usedVarsParameters.notEmpty()){
+		var seqArgs = new Sequence(Sorce!Expression);
+		   for (p in smb.parameters){
+		     for (np in usedVarsParameters){
+		       if (p.name.equals(np.name)){
+		         var refExp = new Source!RefExp();
+		         refExp.ref = np;
+		         seqArgs.add(refExp);
+		         //printDebug("opsig args " + np + " " + np.name + " " + np.type );
+		         //printDebug("opsig refexp " + refExp  );
+		       }
+		     }
+		     }
+		  s.action.args.addAll(seqArgs);
+		}
+		
+		printDebug("Added interfaces to package '" + pkg.name + "' and operation '" + OpS.name + "'");	
+		////////////////////////////////////////////////////////////////////////////////////////////////-	
+		// For each ControllerDef in the set of all controllers 'c' in context (Source!ControllerDef)
+		// for which the 'machines' attribute contains 'smb' or references 'smb', then introduce a
+		// OperationRef element whose 'ref' attribute points to 'OpS'.
+		for ( c : Source!ControllerDef 
+				in select(c:Source!ControllerDef|c.machines.exists(s|getStateMachine(s)==smb) or
+				                                 c.lOperations.exists(s|getOperation(s)==smb))) 
+		{
+			var opRef 	= new Source!OperationRef();
+			opRef.ref 	= OpS;
+			opRef.name	= c.name + "_ref_" + OpS.name;
+			c.lOperations.add(opRef);
+			printDebug("Adding reference to operation in controller '" + c.name + "'");
+		}
+		
+		
+		
+		
+		if (debug)
+		{
+		    printDebug("new operation " + OpS.name);
+			printDebug("End: intro_call_for_act_state");
+			printDebug("******************************");
+		}
+	}
+}
+
+/*
+pattern intro_call_for_act_state
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	smb : Source!StateMachineBody
+		from: pkg.machines,
+	S 	: Source!State	
+		// One of the states of smb
+		from: smb.closure(x:Source!NodeContainer|x.nodes.selectByKind(Source!NodeContainer)),
+		//smb.nodes,
+	s 	: Source!Action
+		// One of its actions
+		from: S.actions 
+     {
+			// When the action is not an operation call
+			match: not s.action.isTypeOf(Source!Call)
+	do {
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		if (S.nodes.notEmpty())
+		     printDebug(" S.nodes.notEmpty() ");
+		else printDebug(" S.nodes is empty ");
+		
+		printDebug("Begin - Replace Action in State to Operation in State of a StateMachineBody ");
+		printDebug("smb.name " + smb.name + " S.name " + S.name + "S.ACTION " + s.action);
+		// Create interfaces to hold new declarations for variables/operations/events used by this action.
+		var req_s 	= new Source!Interface();
+		req_s.name 	= "req_" + setName(smb,S,s);
+		
+		var defEvents_s	= new Source!Interface();
+		defEvents_s.name 	= "defEvents_" + setName(smb,S,s);
+		
+		//Capturing the variables used by s
+		var usedVars = usedVars(s);	
+		
+		var usedOps = usedOps(s);		
+		var usedClocks = usedClocks(s);		
+		var reqVarsOps = reqVarsOps(s);		
+		var reqClocksOps = reqClocksOps(s);		
+		var usedEvents = usedEvents(s);		
+		var defEvOps = defEvOps(s);
+		
+		if (usedVars.notEmpty()) { req_s.variableList.addAll(usedVars); }
+		if (usedOps.notEmpty()) {req_s.operations.addAll(usedOps); }
+		if (usedClocks.notEmpty()) {req_s.clocks.addAll(usedClocks); }
+		if (reqVarsOps.notEmpty()) { req_s.variableList.addAll(reqVarsOps); }
+		if (reqClocksOps.notEmpty()) {req_s.clocks.addAll(reqClocksOps); }
+		if (usedEvents.notEmpty()){defEvents_s.events.addAll(usedEvents);}
+		if (usedVarsEvParameters.notEmpty()){req_s.variableList.addAll(usedVarsEvParameters);}
+		if (defEvOps.notEmpty()){defEvents_s.events.addAll(defEvOps); }
+		
+		////////////////////////////////////////////////////////////////////////////////////////////////-		
+		// Creating the new operation
+		var OpS 	= new Source!OperationDef();
+		OpS.name 	= setName(smb,S,s);
+		
+		// The operation has an Initial junction and a Final state.
+		var OpS_I 	= new Source!Initial();
+		OpS_I.name	= "i";
+		var OpS_F 	= new Source!Final();
+		OpS_F.name 	= "f";
+		
+		// It has a single transition (OpS_tr) from OpS_I to OpS_F
+		var OpS_tr = new Source!Transition();
+		OpS_tr.name	  = "t";
+		OpS_tr.source = OpS_I;
+		OpS_tr.target = OpS_F;
+		OpS_tr.action = s.action;
+						
+		//Adding OpS_I and OpS_F to the set of nodes of OpS
+		OpS.nodes.addAll(Set{OpS_I,OpS_F});
+		//Adding OpS_tr to the set of transitions ofOpS
+		OpS.transitions.add(OpS_tr);
+		
+		//Adding a new signature for OpS
+		var OpSig 	= new Source!OperationSig();
+		OpSig.name 	= OpS.name;
+
+		// Declaring an interface that contains OpS		
+		var IOpS = new Source!Interface();
+		IOpS.name = "I_" + OpS.name;
+		IOpS.operations.add(OpSig);
+		
+		// Delete the required and defined interfaces of OpS if they are empty.
+		// otherwise, we make them required by OpS,
+		// and introduce them in the package
+		if (req_s.variableList.notEmpty() or req_s.operations.notEmpty() or req_s.clocks.notEmpty()){
+		   OpS.rInterfaces.add(req_s);
+		   pkg.interfaces.add(req_s);
+       }
+		else 
+		   delete req_s;
+		
+		if (defEvents_s.events.notEmpty()){
+		   OpS.interfaces.add(defEvents_s);
+		   pkg.interfaces.add(defEvents_s); 
+		}
+		else
+		   delete defEvents_s;
+		
+		//Add OperationDef to current package.
+		pkg.operations.add(OpS);
+		// Add interface to current package.
+		pkg.interfaces.add(IOpS);
+		// Make this interface required by smb.
+		smb.rInterfaces.add(IOpS);
+		
+		printDebug(" s depois da atribuição " + s.action + " E s " + s);
+		var defEvOps = defEvOps(s);
+		
+		// Introduce a Call to the newly defined operation OpS.
+		var OpSCall = new Source!Call();
+		OpSCall.`operation` = OpSig;
+		s.action = OpSCall;
+		
+		printDebug("Added interfaces to package '" + pkg.name + "' and operation '" + OpS.name + "'");	
+		////////////////////////////////////////////////////////////////////////////////////////////////-	
+		// For each ControllerDef in the set of all controllers 'c' in context (Source!ControllerDef)
+		// for which the 'machines' attribute contains 'smb' or references 'smb', then introduce a
+		// OperationRef element whose 'ref' attribute points to 'OpS'.
+		for ( c : Source!ControllerDef 
+				in select(c:Source!ControllerDef|c.machines.exists(s|getStateMachine(s)==smb))) 
+		{
+			var opRef 	= new Source!OperationRef();
+			opRef.ref 	= OpS;
+			opRef.name	= c.name + "_ref_" + OpS.name;
+			c.lOperations.add(opRef);
+			printDebug("Adding reference to operation in controller '" + c.name + "'");
+		}
+		
+		if (debug)
+		{
+			//printDebug("IntroduceSimpleOperation");
+		}
+	}
+}
+*/
+
+//operation statemachineBodies(pkg : Source!RCPackage){
+//
+//  return pkg.machines + pkg.operations;
+//
+//
+//}
+/*
+pattern intro_call_for_act_state_ops
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	smb : Source!StateMachineBody
+		from: pkg.operations,
+	S 	: Source!State	
+		// One of the states of smb
+		//from: smb.nodes,
+		from: smb.closure(x:Source!NodeContainer|x.nodes.selectByKind(Source!NodeContainer)),
+	s 	: Source!Action
+		// One of its actions
+		from: S.actions 
+     {
+			// When the action is not an operation call
+			match: not s.action.isTypeOf(Source!Call)
+	do {
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		
+		printDebug("Begin - Replace Action in State to Operation in State of a StateMachineBody(OpDef) ");
+		printDebug("smb.name " + smb.name + " S.name " + S.name + "S.ACTION " + s.action);
+		// Create interfaces to hold new declarations for variables/operations/events used by this action.
+		var req_s 	= new Source!Interface();
+		req_s.name 	= "req_" + setName(smb,S,s);
+		
+		var defEvents_s	= new Source!Interface();
+		defEvents_s.name 	= "defEvents_" + setName(smb,S,s);
+		
+		//Capturing the variables used by s
+		var usedVars = usedVars(s);	
+		
+		var usedOps = usedOps(s);		
+		var usedClocks = usedClocks(s);		
+		var reqVarsOps = reqVarsOps(s);		
+		var reqClocksOps = reqClocksOps(s);		
+		var usedEvents = usedEvents(s);		
+		var defEvOps = defEvOps(s);
+		
+		if (usedVars.notEmpty()) { req_s.variableList.addAll(usedVars); }
+		if (usedOps.notEmpty()) {req_s.operations.addAll(usedOps); }
+		if (usedClocks.notEmpty()) {req_s.clocks.addAll(usedClocks); }
+		if (reqVarsOps.notEmpty()) { req_s.variableList.addAll(reqVarsOps); }
+		if (reqClocksOps.notEmpty()) {req_s.clocks.addAll(reqClocksOps); }
+		if (usedEvents.notEmpty()){defEvents_s.events.addAll(usedEvents);}
+		if (usedVarsEvParameters.notEmpty()){req_s.variableList.addAll(usedVarsEvParameters);}
+		if (defEvOps.notEmpty()){defEvents_s.events.addAll(defEvOps); }
+		
+		////////////////////////////////////////////////////////////////////////////////////////////////-		
+		// Creating the new operation
+		var OpS 	= new Source!OperationDef();
+		OpS.name 	= setName(smb,S,s);
+		
+		// The operation has an Initial junction and a Final state.
+		var OpS_I 	= new Source!Initial();
+		OpS_I.name	= "i";
+		var OpS_F 	= new Source!Final();
+		OpS_F.name 	= "f";
+		
+		// It has a single transition (OpS_tr) from OpS_I to OpS_F
+		var OpS_tr = new Source!Transition();
+		OpS_tr.name	  = "t";
+		OpS_tr.source = OpS_I;
+		OpS_tr.target = OpS_F;
+		OpS_tr.action = s.action;
+						
+		//Adding OpS_I and OpS_F to the set of nodes of OpS
+		OpS.nodes.addAll(Set{OpS_I,OpS_F});
+		//Adding OpS_tr to the set of transitions ofOpS
+		OpS.transitions.add(OpS_tr);
+		
+		//Adding a new signature for OpS
+		var OpSig 	= new Source!OperationSig();
+		OpSig.name 	= OpS.name;
+
+		// Declaring an interface that contains OpS		
+		var IOpS = new Source!Interface();
+		IOpS.name = "I_" + OpS.name;
+		IOpS.operations.add(OpSig);
+		
+		// Delete the required and defined interfaces of OpS if they are empty.
+		// otherwise, we make them required by OpS,
+		// and introduce them in the package
+		if (req_s.variableList.notEmpty() or req_s.operations.notEmpty() or req_s.clocks.notEmpty()){
+		   printDebug("req_s.variableList.notEmpty() " + req_s);
+		   OpS.rInterfaces.add(req_s);
+		   pkg.interfaces.add(req_s);
+       }
+		else 
+		   delete req_s;
+		
+		if (defEvents_s.events.notEmpty()){
+		   OpS.interfaces.add(defEvents_s);
+		   pkg.interfaces.add(defEvents_s); 
+		}
+		else
+		   delete defEvents_s;
+		
+		//Add OperationDef to current package.
+		pkg.operations.add(OpS);
+		// Add interface to current package.
+		pkg.interfaces.add(IOpS);
+		// Make this interface required by smb.
+		smb.rInterfaces.add(IOpS);
+		
+		//printDebug(" s depois da atribuição " + s.action + " E s " + s);
+		//var defEvOps = defEvOps(s);
+		
+		// Introduce a Call to the newly defined operation OpS.
+		var OpSCall = new Source!Call();
+		OpSCall.`operation` = OpSig;
+		s.action = OpSCall;
+		
+		printDebug("Added interfaces to package '" + pkg.name + "' and operation '" + OpS.name + "'");	
+		////////////////////////////////////////////////////////////////////////////////////////////////-	
+		// For each ControllerDef in the set of all controllers 'c' in context (Source!ControllerDef)
+		// for which the 'machines' attribute contains 'smb' or references 'smb', then introduce a
+		// OperationRef element whose 'ref' attribute points to 'OpS'.
+		for ( c : Source!ControllerDef 
+				in select(c:Source!ControllerDef|c.lOperations.exists(s|getOperation(s)==smb))) 
+		{
+			var opRef 	= new Source!OperationRef();
+			opRef.ref 	= OpS;
+			opRef.name	= c.name + "_ref_" + OpS.name;
+			c.lOperations.add(opRef);
+			printDebug("Adding reference to operation in controller '" + c.name + "'");
+		}
+		
+		if (debug)
+		{
+			//printDebug("IntroduceSimpleOperation");
+		}
+	}
+}
+
+*/
+
+/*
+pattern intro_call_for_act_state_compositeState
+	 pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	smb : Source!StateMachineBody 
+	from: pkg.machines,
+	S 	: Source!State	
+		// One of the states of smb
+		from: smb.closure(x:Source!NodeContainer|x.nodes.selectByKind(Source!NodeContainer)),
+	s 	: Source!Action
+		// One of its actions
+	 , st: Source!State{
+			// When the action is not an operation call
+			match: S.nodes.size() > 0 
+			and  st = S.nodes.selectOne(s1 | s1.isKindOf(Source!State) and s1.actions.size()>0)
+			       and 
+			       st.actions.exists(ac |not ac.action.isTypeOf(Source!Call))
+			       and 
+			       s = st.actions.selectOne(ac |not ac.action.isTypeOf(Source!Call)) 
+
+	do {
+		printDebug("Begin - Replace Action in State to Operation in Composite State of a StateMachineDef " );
+		printDebug("S.name state parent" + st.name + " st.name (child) " + st.name + "s.action " + s.action);
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		// Create a interfaces to hold new declarations for variables/operations/clocks/events used by this action.
+		var req_s 	= new Source!Interface();
+		req_s.name 	= "req_normal_" 	+ smb.name + "_" + S.name + "_" + st.name + "_" + actionName(s);
+		
+		var defEvents_s	= new Source!Interface();
+	    defEvents_s.name 	= "defEvents_normal_" 	+ smb.name + "_" + S.name + "_" + st.name + "_" +  actionName(s);
+		
+        //Capturing the variables used by s
+		var usedVars = usedVars(s);
+		
+		
+		var usedOps = usedOps(s);
+		var usedClocks = usedClocks(s);
+		var reqVarsOps = reqVarsOps(s);
+		var reqClocksOps = reqClocksOps(s);
+		var usedEvents = usedEvents(s);
+		var defEvOps = defEvOps(s);
+		
+		if (usedVars.notEmpty()) { req_s.variableList.addAll(usedVars); }
+		if (usedOps.notEmpty()) {req_s.operations.addAll(usedOps); }
+		if (usedClocks.notEmpty()) {req_s.clocks.addAll(usedClocks); }
+		if (reqVarsOps.notEmpty()) { req_s.variableList.addAll(reqVarsOps); }
+		if (reqClocksOps.notEmpty()) {req_s.clocks.addAll(reqClocksOps); }
+		if (usedEvents.notEmpty()){defEvents_s.events.addAll(usedEvents); }
+		if (defEvOps.notEmpty()){defEvents_s.events.addAll(defEvOps); }
+		
+		////////////////////////////////////////////////////////////////////////////////////////////////-		
+		// Create the new operation
+		var OpS 	= new Source!OperationDef();
+		OpS.name 	= setName(smb,S,st,s);
+	
+		// The operation has an Initial junction and a Final state.
+		var OpS_I 	= new Source!Initial();
+		OpS_I.name	= "i";
+		var OpS_F 	= new Source!Final();
+		OpS_F.name 	= "f";
+		
+		// It has a single OpS_tr from OpS_I to OpS_F
+		var OpS_tr = new Source!Transition();
+		OpS_tr.name	  = "t";
+		OpS_tr.source = OpS_I;
+		OpS_tr.target = OpS_F;
+		OpS_tr.action = s.action;		
+		// Add the above OpS_I and OpS_F to the sequence of nodes,
+		// and the new OpS_tr to the sequence of transitions. 
+		OpS.nodes.addAll(Set{OpS_I,OpS_F});
+		OpS.transitions.add(OpS_tr);
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+		
+		// Delete interfaces if they are empty as the result of the operations
+		// above, otherwise introduce them in the package, and make them required by
+		// the new operation.
+		if (req_s.variableList.notEmpty() or req_s.operations.notEmpty() or req_s.clocks.notEmpty()){
+		   OpS.rInterfaces.add(req_s);
+		   pkg.interfaces.add(req_s);
+       }
+		else 
+		   delete req_s;
+		
+		if (defEvents_s.events.notEmpty()){
+		   OpS.interfaces.add(defEvents_s);
+		   pkg.interfaces.add(defEvents_s); 
+		}
+		else
+		   delete defEvents_s;
+		
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		//Creating the new signature for inclusion in the interface
+		var OpSig 	= new Source!OperationSig();
+		OpSig.name 	= OpS.name;
+		//"normal_" + smb.name + "_" + S.name + "_" + st.name + "_" +  actionName(s) + "_op";
+		
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+		// Declare an interface that contains the new operation		
+		var IOpS = new Source!Interface();
+		IOpS.name = "I_" + OpS.name;
+		IOpS.operations.add(OpSig);
+		
+		// Add OperationDef to current package.
+		pkg.operations.add(OpS);
+		// Add interface to current package.
+		pkg.interfaces.add(IOpS);
+		// Make this interface required by smb.
+		smb.rInterfaces.add(IOpS);
+		// Introduce a Call to the newly defined operation.
+		var OpSCall = new Source!Call();
+		// Replace the statement in action 'a' by a call to the operation signature IOpS.
+		OpSCall.`operation` = OpSig;
+		s.action = OpSCall;
+			
+		printDebug("Added interfaces to package '" + pkg.name + "' and operation '" + OpS.name + "'");	
+		////////////////////////////////////////////////////////////////////////////////////////////////-	
+		// For each ControllerDef in the set of all controllers 'c' in context (Source!ControllerDef)
+		// for which the 'machines' attribute contains 'smb' or references 'smb', then introduce a
+		// OperationRef element whose 'ref' attribute points to 'OpS'.
+		for ( c : Source!ControllerDef 
+				in select(c:Source!ControllerDef|c.machines.exists(s|getStateMachine(s)==smb))) 
+		{
+			var opRef 	= new Source!OperationRef();
+			opRef.ref 	= OpS;
+			opRef.name	= c.name + "_ref_" + OpS.name;
+			c.lOperations.add(opRef);
+			printDebug("Adding reference to operation in controller '" + c.name + "'");
+		}
+		
+		if (debug)
+		{
+			printDebug("End - Replace Action in State to Operation in Composite State of a StateMachineDef");
+		}
+	}
+}
+*/
+
+
+/*
+pattern intro_call_for_act_state_compositeState_ops
+	 pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	smb : Source!StateMachineBody 
+	from: pkg.operations,
+	S 	: Source!State	
+		// One of the states of smb
+		from: smb.closure(x:Source!NodeContainer|x.nodes.selectByKind(Source!NodeContainer)),
+	s 	: Source!Action
+		// One of its actions
+	 , st: Source!State{
+			// When the action is not an operation call
+			match: S.nodes.size() > 0 
+			and  st = S.nodes.selectOne(s1 | s1.isKindOf(Source!State) and s1.actions.size()>0)
+			       and 
+			       st.actions.exists(ac |not ac.action.isTypeOf(Source!Call))
+			       and 
+			       s = st.actions.selectOne(ac |not ac.action.isTypeOf(Source!Call)) 
+
+	do {
+		printDebug("Begin - Replace Action in State to Operation in Composite State of a OperationDef" );
+		printDebug("S.name state parent" + st.name + " st.name (child) " + st.name + "s.action " + s.action);
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		// Create a interfaces to hold new declarations for variables/operations/clocks/events used by this action.
+		var req_s 	= new Source!Interface();
+		req_s.name 	= "req_normal_" 	+ smb.name + "_" + S.name + "_" + st.name + "_" + actionName(s);
+		
+		var defEvents_s	= new Source!Interface();
+	    defEvents_s.name 	= "defEvents_normal_" 	+ smb.name + "_" + S.name + "_" + st.name + "_" +  actionName(s);
+		
+        //Capturing the variables used by s
+		var usedVars = usedVars(s);
+		
+		
+		var usedOps = usedOps(s);
+		var usedClocks = usedClocks(s);
+		var reqVarsOps = reqVarsOps(s);
+		var reqClocksOps = reqClocksOps(s);
+		var usedEvents = usedEvents(s);
+		var defEvOps = defEvOps(s);
+		
+		if (usedVars.notEmpty()) { req_s.variableList.addAll(usedVars); }
+		if (usedOps.notEmpty()) {req_s.operations.addAll(usedOps); }
+		if (usedClocks.notEmpty()) {req_s.clocks.addAll(usedClocks); }
+		if (reqVarsOps.notEmpty()) { req_s.variableList.addAll(reqVarsOps); }
+		if (reqClocksOps.notEmpty()) {req_s.clocks.addAll(reqClocksOps); }
+		if (usedEvents.notEmpty()){defEvents_s.events.addAll(usedEvents); }
+		if (defEvOps.notEmpty()){defEvents_s.events.addAll(defEvOps); }
+		
+		////////////////////////////////////////////////////////////////////////////////////////////////-		
+		// Create the new operation
+		var OpS 	= new Source!OperationDef();
+		OpS.name 	= setName(smb,S,st,s);
+	
+		// The operation has an Initial junction and a Final state.
+		var OpS_I 	= new Source!Initial();
+		OpS_I.name	= "i";
+		var OpS_F 	= new Source!Final();
+		OpS_F.name 	= "f";
+		
+		// It has a single OpS_tr from OpS_I to OpS_F
+		var OpS_tr = new Source!Transition();
+		OpS_tr.name	  = "t";
+		OpS_tr.source = OpS_I;
+		OpS_tr.target = OpS_F;
+		OpS_tr.action = s.action;		
+		// Add the above OpS_I and OpS_F to the sequence of nodes,
+		// and the new OpS_tr to the sequence of transitions. 
+		OpS.nodes.addAll(Set{OpS_I,OpS_F});
+		OpS.transitions.add(OpS_tr);
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+		
+		// Delete interfaces if they are empty as the result of the operations
+		// above, otherwise introduce them in the package, and make them required by
+		// the new operation.
+		if (req_s.variableList.notEmpty() or req_s.operations.notEmpty() or req_s.clocks.notEmpty()){
+		   OpS.rInterfaces.add(req_s);
+		   pkg.interfaces.add(req_s);
+       }
+		else 
+		   delete req_s;
+		
+		if (defEvents_s.events.notEmpty()){
+		   OpS.interfaces.add(defEvents_s);
+		   pkg.interfaces.add(defEvents_s); 
+		}
+		else
+		   delete defEvents_s;
+		
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		//Creating the new signature for inclusion in the interface
+		var OpSig 	= new Source!OperationSig();
+		OpSig.name 	= OpS.name;
+		//"normal_" + smb.name + "_" + S.name + "_" + st.name + "_" +  actionName(s) + "_op";
+		
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+		// Declare an interface that contains the new operation		
+		var IOpS = new Source!Interface();
+		IOpS.name = "I_" + OpS.name;
+		IOpS.operations.add(OpSig);
+		
+		// Add OperationDef to current package.
+		pkg.operations.add(OpS);
+		// Add interface to current package.
+		pkg.interfaces.add(IOpS);
+		// Make this interface required by smb.
+		smb.rInterfaces.add(IOpS);
+		// Introduce a Call to the newly defined operation.
+		var OpSCall = new Source!Call();
+		// Replace the statement in action 'a' by a call to the operation signature IOpS.
+		OpSCall.`operation` = OpSig;
+		s.action = OpSCall;
+			
+		printDebug("Added interfaces to package '" + pkg.name + "' and operation '" + OpS.name + "'");	
+		////////////////////////////////////////////////////////////////////////////////////////////////-	
+		// For each ControllerDef in the set of all controllers 'c' in context (Source!ControllerDef)
+		// for which the 'machines' attribute contains 'smb' or references 'smb', then introduce a
+		// OperationRef element whose 'ref' attribute points to 'OpS'.
+		for ( c : Source!ControllerDef 
+				in select(c:Source!ControllerDef|c.lOperations.exists(s|getOperation(s)==smb))) 
+		{
+			var opRef 	= new Source!OperationRef();
+			opRef.ref 	= OpS;
+			opRef.name	= c.name + "_ref_" + OpS.name;
+			c.lOperations.add(opRef);
+			printDebug("Adding reference to operation in controller '" + c.name + "'");
+		}
+		
+		if (debug)
+		{
+			printDebug("End - Replace Action in State to Operation in Composite State of a StateMachineDef");
+		}
+	}
+}
+*/
+
+operation usedVars(s:Source!Statement) {
+ /*
+    usedVarsNames = new Set(String);
+    var usedVarList = new Set(Source!VariableList);
+    
+	
+	// Compute all objects of the metamodel that are contained by transitivity in s.
+	var statementContents = s.closure(x|x.eContents());
+	
+	// We calculate two sets, the variables in a 'VarRef' and those in a 'RefExp'.
+	var varrefs = statementContents.select(y:Source!VarRef|true).collect(z:Source!VarRef|z.name).asSet();
+	var varexps = statementContents.select(y:Source!RefExp|not(y.ref.isTypeOf(Source!Function))).collect(z:Source!RefExp|z.ref).asSet();
+	var commInput = statementContents.select(x:Source!Communication|x._type == CommunicationType#INPUT).collect(z:Source!Communication|z).asSet();
+	// An Interface is a BasicContext, which can have sequences of VariableList elements,
+	// so we create a new VariableList and add this to the sequence.
+	var variableList = new Source!VariableList();
+	var constantList = new Source!VariableList();
+	
+	variableList.modifier = Source!VariableModifier#VAR;	// Variables
+	constantList.modifier = Source!VariableModifier#CONST; 	// Constants
+	
+	//It is used to store the parameters (variables) of a input communication 
+	var varsCommInput = new Set(Source!Variable);
+	if (commInput.notEmpty()){
+	    for (inp in commInput){
+	        //printDebug(" s.communication.parameter " + inp.parameter);
+	        varsCommInput.add(inp.parameter);
+		    //printDebug("varsCommInput " + varsCommInput);     
+	    }  
+	}		
+	   
+	for (v in (varrefs+varexps+varsCommInput)){      
+	       var newVar = ecoreUtil.copy(v);
+	       usedVarsNames.add(newVar.name);
+	       if (v.modifier == Source!VariableModifier#VAR)
+			variableList.vars.add(newVar);
+		   else
+			constantList.vars.add(newVar);	       
+			
+	        // Update all variable references to the old variable declaration 'v' => newVar.
+			for (varref in statementContents.select(x:Source!VarRef|x.name = v)) {
+				varref.name = newVar;
+			}
+			// Update all expression references to the old variable declaration 'v' => newVar.
+			for (refexp in statementContents.select(x:Source!RefExp|x.ref = v)) {
+				refexp.ref = newVar;
+			}
+			for (commInput in statementContents.select(x:Source!Communication|x._type == CommunicationType#INPUT
+			        and x.parameter = v)) {
+			          commInput.parameter = newVar;
+		         }
+			
+		
+	    }
+	    
+	 // In principle, we could add empty lists.. but here we make sure not to do so.
+	if (variableList.vars.size > 0) {
+		usedVarList.add(variableList);
+	} else {
+		delete variableList;
+	}
+	
+	if (constantList.vars.size > 0){
+		usedVarList.add(constantList);
+	} else {
+		delete constantList;
+	}
+	
+	//printDebug(" usedVarList " + usedVarList);
+	return usedVarList;
+*/
+
+    usedVarsNames = new Set(String);
+    usedVarsParameters = new Set(Source!Parameter);
+    usedVarsParametersCl = new Set(Source!Parameter);
+    var usedVarList = new Set(Source!VariableList);
+	
+	// Compute all objects of the metamodel that are contained by transitivity in s.
+	var statementContents = s.closure(x|x.eContents());
+	
+	// We calculate two sets, the variables in a 'VarRef' and those in a 'RefExp'.
+	var varrefs = statementContents.select(y:Source!VarRef|true).collect(z:Source!VarRef|z.name).asSet();
+	var varexps = statementContents.select(y:Source!RefExp|not(y.ref.isTypeOf(Source!Function))).collect(z:Source!RefExp|z.ref).asSet();
+	var commInput = statementContents.select(x:Source!Communication|x._type == CommunicationType#INPUT).collect(z:Source!Communication|z).asSet();
+	// An Interface is a BasicContext, which can have sequences of VariableList elements,
+	// so we create a new VariableList and add this to the sequence.
+	
+	//Parameters
+	var parexps = statementContents.select(y:Source!RefExp|y.ref.isTypeOf(Source!Parameter)).collect(z:Source!RefExp|z.ref).asSet();
+	//printDebug(" parexps " + parexps);	  
+	
+	var variableList = new Source!VariableList();
+	var constantList = new Source!VariableList();
+	
+	variableList.modifier = Source!VariableModifier#VAR;	// Variables
+	constantList.modifier = Source!VariableModifier#CONST; 	// Constants
+	
+	//It is used to store the parameters (variables) of a input communication 
+	var varsCommInput = new Set(Source!Variable);
+	if (commInput.notEmpty()){
+	    for (inp in commInput){
+	        //printDebug(" s.communication.parameter " + inp.parameter);
+	        varsCommInput.add(inp.parameter);
+		    //printDebug("varsCommInput " + varsCommInput);     
+	    }  
+	}		
+	   
+	for (v in (varrefs+varexps+varsCommInput+parexps)){ 
+	       
+	       
+	       if (v.isTypeOf(Source!Parameter)){
+	         var newPar = ecoreUtil.copy(v);
+	         usedVarsParameters.add(v);
+	         usedVarsParametersCl.add(newPar);
+	         for (refexp in statementContents.select(x:Source!RefExp|x.ref = v)) {
+				refexp.ref = newPar;
+				printDebug(" v.isTypeOf(Source!Parameter) " + refexp.ref + "" + refexp);
+			}
+	         
+	       } 
+	         
+	       else { 
+	       
+	       var newVar = ecoreUtil.copy(v);
+	       printDebug(" newVar " + newVar);
+	       //Here, we need to check wheather the initial value of a variable is defined by a Constant
+	       printDebug(" Here, we need to check if the initial value of a variable is defined by a Constant " + newVar);
+	       
+	       
+	       
+	       usedVarsNames.add(newVar.name);
+	       
+	       if (v.modifier == Source!VariableModifier#VAR){
+	        if (v.initial <> null){
+	           printDebug(" v.initial <> null " + v.initial);
+	           newVar.initial = null;
+	        }
+			variableList.vars.add(newVar);
+			printDebug(" v.modifier == Source!VariableModifier#VAR ");
+			
+			}
+		   else{
+			constantList.vars.add(newVar);
+			//printDebug(" v.modifier == const ");
+			}	       
+			
+	        // Update all variable references to the old variable declaration 'v' => newVar.
+			for (varref in statementContents.select(x:Source!VarRef|x.name = v)) {
+				varref.name = newVar;
+				//printDebug(" newVar " + newVar);
+			}
+			// Update all expression references to the old variable declaration 'v' => newVar.
+			for (refexp in statementContents.select(x:Source!RefExp|x.ref = v)) {
+				refexp.ref = newVar;
+				//printDebug(" refexp newVar " + newVar);
+			}
+			for (commInput in statementContents.select(x:Source!Communication|x._type == CommunicationType#INPUT
+			        and x.parameter = v)) {
+			          commInput.parameter = newVar;
+		    }
+			}
+		
+	    }
+	    
+	 // In principle, we could add empty lists.. but here we make sure not to do so.
+	if (variableList.vars.size > 0) {
+		usedVarList.add(variableList);
+	} else {
+		delete variableList;
+	}
+	
+	if (constantList.vars.size > 0){
+		usedVarList.add(constantList);
+	} else {
+		delete constantList;
+	}
+	
+	printDebug(" usedVarList " + usedVarList);
+	return usedVarList;
+}
+
+operation usedOps(s:Source!Statement) {
+
+    var usedOps = new Set(Source!OperationSig);
+    usedOpSig = new Set(Source!OperationSig);
+    //usedOpsNames = new Set(String);
+	// Compute all objects of the metamodel that are contained by transitivity in s.
+	var statementContents = s.closure(x|x.eContents());
+	var contents = statementContents.select(y:Source!Call|true).collect(z:Source!Call|z.`operation`).asSet();
+	
+	for (op in contents){
+	    
+		var newOpSig = ecoreUtil.copy(op);
+        	
+		for (stmt in statementContents.select(x:Source!Call|x.`operation` = op)) {
+			stmt.`operation` = newOpSig;
+		}
+		//Adding newOpSig
+		usedOps.add(newOpSig);
+		usedOpSig.add(newOpSig);
+		//usedOpsNames.add(newOpSig.name);
+		
+      } 
+   return usedOps;
+       
+}
+
+operation usedClocks(s:Source!Statement){
+
+  var usedClocks = new Set(Source!Clock);
+  usedClocksNames = new Set(String);
+  
+  // Compute all objects of the metamodel that are contained by transitivity in s.
+  var statementContents = s.closure(x|x.eContents());
+  var contents = statementContents.select(x:Source!ClockReset|true).collect(z:Source!ClockReset|z.clock).asSet();  
+  
+  for (c in contents){
+      // Create the new clock declaration
+	  var newClock = ecoreUtil.copy(c);   
+      // Replace all clock references
+		for (stmt in statementContents.select(x:Source!ClockReset|x.clock = c)) {
+		    //printDebug("t.clock " + t.clock);
+			stmt.clock = newClock;
+		}
+		
+	  usedClocks.add(newClock);
+	  usedClocksNames.add(newClock.name);
+  }
+  
+  if (s.isKindOf(Source!ClockReset)){
+     printDebug("s.isKindOf(Source!ClockReset) " + s.clock.name);
+     var newClock = ecoreUtil.copy(s.clock);
+     s.clock = newClock;
+     usedClocks.add(newClock);
+     usedClocksNames.add(newClock.name);
+  }
+  
+  return usedClocks;
+}
+
+operation usedEvents(s:Source!Statement) {
+	
+	var usedEvents = new Set(Source!Event);
+	usedEvsNames = new Set(String);
+	// Compute all objects of the metamodel that are contained by transitivity in s.
+	var statementContents = s.closure(x|x.eContents());
+	var contents = statementContents.select(x:Source!Communication|true).collect(z:Source!Communication|z.event).asSet();
+    //printDebug("contents " + contents);
+    
+    for (ev in contents) {
+        var newEvent = ecoreUtil.copy(ev);
+		
+		for (stmt in statementContents.select(x:Source!Communication|x.event = ev)) {
+			stmt.event = newEvent;
+		}	
+
+		usedEvents.add(newEvent);
+		usedEvsNames.add(newEvent.name);
+		
+    }
+   //printDebug(" usedEvents " + usedEvents); 
+   return usedEvents;
+	
+}
+
+operation reqVarsOps(s:Source!Statement) {
+
+    var variableList = new Source!VariableList();
+	var constantList = new Source!VariableList();
+	
+	variableList.modifier = Source!VariableModifier#VAR;	// Variables
+	constantList.modifier = Source!VariableModifier#CONST; 	// Constants
+	
+    var reqVarsOps = new Set(Source!VariableList);
+   
+    var softOpNames = collectSoftwareOperationsName();
+    var softOps = collectSoftwareOperations();
+   
+    for(op in usedOpSig){
+          if (softOpNames.includes(op.name)){
+            var operationDef = softOps.selectOne(opDef:Source!OperationDef|opDef.name.equals(op.name));          
+            var reqInterfaces = operationDef.rInterfaces.select(i|i.variableList.size()>0).asSet();
+            for (r in reqInterfaces){ 
+		      	for (vl in r.variableList){
+		      	  for (v in vl.vars){
+		      	  	if (not usedVarsNames.includes(v.name)){
+		      	    	printDebug("usedVarsNames.includes(v.name) " + v.name);
+		      	    	var newVar = ecoreUtil.copy(v);
+		      	    	if (v.modifier == Source!VariableModifier#VAR)
+							variableList.vars.add(newVar);
+		   	            else
+							constantList.vars.add(newVar);	 
+		      	    	usedVarsNames.add(newVar.name);
+		          }
+		        } 
+		 
+		      }
+       
+          }
+           // In principle, we could add empty lists.. but here we make sure not to do so.
+			if (variableList.vars.size > 0) {
+				reqVarsOps.add(variableList);
+			} else {
+				delete variableList;
+			}
+	
+			if (constantList.vars.size > 0){
+				reqVarsOps.add(constantList);
+			} else {
+				delete constantList;
+			}
+       }
+    
+   }
+   return reqVarsOps;
+       
+}
+
+
+operation reqClocksOps(s:Source!Statement) {
+
+    var reqClocksOpS = new Set(Source!Clock);
+    var softOps = collectSoftwareOperations();
+    var softOpNames = collectSoftwareOperationsName();
+    printDebug("In reqClocksOps: softOpNames " + softOpNames);
+    printDebug("In reqClocksOps: usedOpSig " + usedOpSig);
+    for(op in usedOpSig){
+          if (softOpNames.includes(op.name)){
+            var operationDef = softOps.selectOne(opDef:Source!OperationDef|opDef.name.equals(op.name));          
+            var reqInterfaces = operationDef.rInterfaces.select(i|i.clocks.size()>0).asSet();
+               for (r in reqInterfaces){                
+       		      	for (cl in r.clocks){
+    		      	  	if (not usedClocksNames.includes(cl.name)){
+  		      	  	    	var newClk = ecoreUtil.copy(cl);
+		      	        	reqClocksOpS.add(newClk);
+		      	        	usedClocksNames.add(newClk.name);
+    		          }
+  		             
+		        } 
+ 		      
+			}
+         
+       }
+    
+   }
+   return reqClocksOpS;
+       
+}
+
+operation defEvOps(s:Source!Statement) {
+	
+    var defEvOps = new Set(Source!Event);
+    var softOps = collectSoftwareOperations();
+    var softOpNames = collectSoftwareOperationsName();
+   
+     for(op in usedOpSig){
+          if (softOpNames.includes(op.name)){
+            var operationDef = softOps.selectOne(opDef:Source!OperationDef|opDef.name.equals(op.name));  
+            var interfaces = operationDef.interfaces.select(i|i.events.size()>0).asSet();
+               for (i in interfaces){                
+       		      	for (ev in i.events){
+    		      	  	if (not usedEvsNames.includes(ev.name)){
+  		      	  	      var newEv = ecoreUtil.copy(ev);
+		      	          defEvOps.add(newEv);
+		      	          usedEvsNames.add(newEv.name);
+    		          }
+		        } 	      
+			}
+			for (ev in operationDef.events){
+			//printDebug(" local ev " + ev.name);
+			   if (not usedEvsNames.includes(ev.name)){
+  		      	  	  var newEv = ecoreUtil.copy(ev);
+		      	      defEvOps.add(newEv);
+		      	      usedEvsNames.add(newEv.name);
+    		    }
+			
+			}
+       }
+    
+   }
+   return defEvOps;
+}
+
+//smb : Source!StateMachineBody
+//		from: smbs(pkg),//pkg.machines + pkg.operations,
+//	S 	: Source!State	
+//		// One of the states of smb
+//		from: nodesSmb(smb),
+//	s 	: Source!Action
+//		// One of its actions
+//		from: S.actions 
+
+pattern intro_call_for_act_transition
+	 pkg : Source!RCPackage,
+		//guard: pkg.name.asString().startsWith(clonepackagename),
+	 smb : Source!StateMachineBody 
+//	from: pkg.machines,
+//	// + pkg.operations,
+//	t : Source!Transition 
+//	from: smb.transitions
+    	from: smbs(pkg) + origSoftOps,
+     t : Source!Transition
+    	from: smb.transitions 
+	{
+	// When the action is not an operation call
+	match: not (t.action = null) 
+		   and not (t.action.isTypeOf(Source!Call))
+		   and not (smb.name.startsWith("normal_")) //mscf 11/7/22
+		           /*
+                    We added this condition to avoid a recursion on 
+                     the new operations that are introduced by Step1 of normSMB()
+                   */
+	do {
+		
+		printDebug("Begin - intro_call_for_act_transition" );
+		printDebug("t.name " + t.name + "smb.name " + smb.name);
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		// Create a interfaces to hold new declarations for variables/operations/events used by this t.action.
+		var req_s 	= new Source!Interface();
+		var defEvents_s	= new Source!Interface();
+		if (smb.name.startsWith("normal_")){
+			req_s.name 	= "req_" + setName(smb,t.source,t);//setName(smb.name,t.source.name,t.name);
+			defEvents_s.name = "defEvents_" + setName(smb,t.source,t); //setName(smb.name,t.source.name,t.name);
+		}
+		else{
+			req_s.name 	=  "req_normal_" + setName(smb,t.source,t);//setName(smb.name,t.source.name,t.name);
+		    defEvents_s.name = "defEvents_normal_" + setName(smb,t.source,t); //setName(smb.name,t.source.name,t.name);
+		}
+		
+			
+		usedVarsNames = new Set(String);
+		//usedOpSig = new Set(Source!OperationSig);
+		//Capturing the variables used by s
+		var usedVars = usedVars(t.action);	
+		/*Capturing the (software and platform) operations used by s
+		  and for each software operation (IOpS) in usedOps, 
+		  we need to compute its required variables and clocks required by op, and theirs defined events
+        */
+		var usedOps = usedOps(t.action);		
+		var usedClocks = usedClocks(t.action);		
+		var reqVarsOps = reqVarsOps(t.action);		
+		var reqClocksOps = reqClocksOps(t.action);		
+		var usedEvents = usedEvents(t.action);		
+		var defEvOps = defEvOps(t.action);
+		
+        if (usedVars.notEmpty()) { req_s.variableList.addAll(usedVars); }
+		if (usedOps.notEmpty()) {req_s.operations.addAll(usedOps); }
+		if (usedClocks.notEmpty()) {req_s.clocks.addAll(usedClocks); }
+		if (reqVarsOps.notEmpty()) { req_s.variableList.addAll(reqVarsOps); }
+		if (reqClocksOps.notEmpty()) {req_s.clocks.addAll(reqClocksOps); }
+		if (usedEvents.notEmpty()){defEvents_s.events.addAll(usedEvents); }
+		if (defEvOps.notEmpty()){defEvents_s.events.addAll(defEvOps); }
+		
+		////////////////////////////////////////////////////////////////////////////////////////////////-		
+		// Create the new operation
+		var OpS 	= new Source!OperationDef();
+		if (smb.name.startsWith("normal_"))
+			OpS.name 	= setName(smb,t.source,t);//setName("normal",smb.name,t.source.name,t.name,"op");
+		else
+			OpS.name 	= "normal_" + setName(smb,t.source,t);
+			
+		// The operation has an Initial junction and a Final state.
+		var OpS_I 	= new Source!Initial();
+		OpS_I.name	= "i";
+		var OpS_F 	= new Source!Final();
+		OpS_F.name 	= "f";
+		
+		// It has a single transition (OpS_tr) from OpS_I to OpS_F
+		var OpS_tr = new Source!Transition();
+		OpS_tr.name	  = "t";
+		OpS_tr.source = OpS_I;
+		OpS_tr.target = OpS_F;
+		OpS_tr.action = t.action;
+				
+		//Adding OpS_I and OpS_F to the set of nodes of OpS
+		OpS.nodes.addAll(Set{OpS_I,OpS_F});
+		//Adding OpS_tr to the set of transitions ofOpS
+		OpS.transitions.add(OpS_tr);
+		
+		//Dealing with parameters
+		var seqPars = new Sequence(Sorce!Parameter);
+		var seqParsOpSig = new Sequence(Sorce!Parameter);
+		if(usedVarsParametersCl.notEmpty()){
+		  for (p in smb.parameters){
+		     for (np in usedVarsParametersCl){
+		       if (p.name.equals(np.name)){
+		         var parOpSig = ecoreUtil.copy(np);
+		         seqPars.add(np);
+		         seqParsOpSig.add(parOpSig);
+		         //printDebug("p.name.equals(np.name) " + np + " " + np.name + " " + np.type );
+		       }
+		     }
+		  }
+		
+		   OpS.parameters.addAll(seqPars);
+		   //printDebug("OpS.parameters " + OpS.parameters);
+		}
+		
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		//Creating the new signature for OpS
+		var OpSig 	= new Source!OperationSig();
+		OpSig.name 	= OpS.name;
+		
+		//Adding the parameters for OpSig
+		if(usedVarsParametersCl.notEmpty()){
+		   OpSig.parameters.addAll(seqParsOpSig);
+		}
+		
+		
+		// Declaring an interface that contains OpS		
+		var IOpS = new Source!Interface();
+		IOpS.name = "I_" + OpS.name;
+		IOpS.operations.add(OpSig);
+		
+		// Delete the required and defined interfaces of OpS if they are empty.
+		// otherwise, we make them required by OpS,
+		// and introduce them in the package
+		if (req_s.variableList.notEmpty() or req_s.operations.notEmpty() or req_s.clocks.notEmpty()){
+		   OpS.rInterfaces.add(req_s);
+		   pkg.interfaces.add(req_s);
+       }
+		else 
+		   delete req_s;
+		
+		if (defEvents_s.events.notEmpty()){
+		   OpS.interfaces.add(defEvents_s);
+		   pkg.interfaces.add(defEvents_s); 
+		}
+		else
+		   delete defEvents_s;
+		
+		// Add OperationDef to current package.
+		pkg.operations.add(OpS);
+		// Add interface to current package.
+		pkg.interfaces.add(IOpS);
+		// Make this interface required by smb.
+		smb.rInterfaces.add(IOpS);
+		
+		// Introduce a Call to OpS.
+		var OpSCall = new Source!Call();
+		OpSCall.`operation` = OpSig;
+		t.action = OpSCall;
+		
+		//This call may have arguments, so we need to create a new RefExp for each one of them
+		if (usedVarsParameters.notEmpty()){
+		var seqArgs = new Sequence(Sorce!Expression);
+		   for (p in smb.parameters){
+		     for (np in usedVarsParameters){
+		       if (p.name.equals(np.name)){
+		         var refExp = new Source!RefExp();
+		         refExp.ref = np;
+		         seqArgs.add(refExp);
+		         //printDebug("opsig args " + np + " " + np.name + " " + np.type );
+		         //printDebug("opsig refexp " + refExp  );
+		       }
+		     }
+		     }
+		  t.action.args.addAll(seqArgs);
+		}	    
+			
+		printDebug("Added interfaces to package '" + pkg.name + "' and operation '" + OpS.name + "'");	
+		////////////////////////////////////////////////////////////////////////////////////////////////-	
+		// For each ControllerDef in the set of all controllers 'c' in context (Source!ControllerDef)
+		// for which the 'machines' attribute contains 'smb' or references 'smb', then introduce a
+		// OperationRef element whose 'ref' attribute points to 'OpS'.
+		//for ( c : Source!ControllerDef 
+		//		in select(c:Source!ControllerDef|c.machines.exists(s|getStateMachine(s)==smb))) 
+				
+		for ( c : Source!ControllerDef 
+				in select(c:Source!ControllerDef|c.machines.exists(s|getStateMachine(s)==smb) or
+				                                 c.lOperations.exists(s|getOperation(s)==smb)))
+		{
+			var opRef 	= new Source!OperationRef();
+			opRef.ref 	= OpS;
+			opRef.name	= c.name + "_ref_" + OpS.name;
+			c.lOperations.add(opRef);
+			printDebug("Adding reference to operation in controller '" + c.name + "'");
+		}
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+
+		if (debug)
+		{
+		    printDebug("new Operation " + OpS.name + " for action in " + t.name);
+			printDebug("End - intro_call_for_act_transition");
+			printDebug("************************************");
+
+		}
+		
+	}
+}
+
+pattern intro_call_for_act_transition_compositeState
+	 pkg : Source!RCPackage,
+		//guard: pkg.name.asString().startsWith(clonepackagename),
+	smb : Source!StateMachineBody from:  smbs(pkg) + origSoftOps, //pkg.machines + pkg.operations,
+	S 	: Source!NodeContainer //State
+		// One of the states of S
+		from: smb.closure(x:Source!NodeContainer|x.nodes.selectByKind(Source!NodeContainer)),		      
+	t 	: Source!Transition from: S.transitions{
+
+	match: //S.nodes.size() > 0 and 
+	       //t = S.transitions.selectOne(t1 | not(t1.action = null) 
+	        //                                and not(t1.action.isKindOf(Source!Call)))
+	       not (smb.name.startsWith("normal_"))
+	       and S.nodes.size() > 0 
+	       and not (t.action = null) 
+	       and not (t.action.isKindOf(Source!Call))                                  
+	do {
+	    printDebug("******************************************************");
+        printDebug("Begin - intro_call_for_act_transition (composite state)" );
+ 		printDebug("fullNameSmb(S) " + fullNameSmb(S));
+//////////////////////////////////////////////////////////////////////////////////////////////////
+		// Create a interfaces to hold new declarations for variables/operations/events used by this t.action.
+		var req_s 	= new Source!Interface();
+		var defEvents_s	 = new Source!Interface();
+		if (smb.name.startsWith("normal_")){
+			req_s.name = "req_" + fullNameSt(S) + "_" + t.source.name + "_" + t.name + "_op";//setName(smb,S,t.source,t);//setName(smb.name,S.name,t.source.name,t.name);
+			defEvents_s.name = "defEvents_" + fullNameSt(S) + "_" + t.source.name + "_" + t.name + "_op";//setName(smb,S,t.source,t);//setName(smb.name,S.name,t.source.name,t.name);
+		}
+		else{
+			req_s.name = "req_normal_" + fullNameSt(S) + "_" + t.source.name + "_" + t.name + "_op";//setName(smb,S,t.source,t);//setName(smb.name,S.name,t.source.name,t.name);
+			defEvents_s.name = "defEvents_normal_" + fullNameSt(S) + "_" + t.source.name + "_" + t.name + "_op";//setName(smb,S,t.source,t);
+		}
+			
+		
+//	    //setName("defEvents",smb.name,t.source.name,t.name);
+//		
+        usedVarsNames = new Set(String);
+		//Capturing the variables used by s
+		var usedVars = usedVars(t.action);	
+		
+        var usedOps = usedOps(t.action);		
+		var usedClocks = usedClocks(t.action);		
+		var reqVarsOps = reqVarsOps(t.action);		
+		var reqClocksOps = reqClocksOps(t.action);		
+		var usedEvents = usedEvents(t.action);		
+		var defEvOps = defEvOps(t.action);
+		
+		if (usedVars.notEmpty()) { req_s.variableList.addAll(usedVars); }
+		if (usedOps.notEmpty()) {req_s.operations.addAll(usedOps); }
+		if (usedClocks.notEmpty()) {req_s.clocks.addAll(usedClocks); }
+		if (reqVarsOps.notEmpty()) { req_s.variableList.addAll(reqVarsOps);}
+		if (reqClocksOps.notEmpty()) {req_s.clocks.addAll(reqClocksOps); }
+		if (usedEvents.notEmpty()){defEvents_s.events.addAll(usedEvents);}
+		if (defEvOps.notEmpty()){defEvents_s.events.addAll(defEvOps);}
+//  	
+//		////////////////////////////////////////////////////////////////////////////////////////////////-		
+//		// Create the new operation OpS
+		var OpS = new Source!OperationDef();
+		if (smb.name.startsWith("normal_"))
+			OpS.name = fullNameSt(S) + "_" + t.source.name + "_" + t.name + "_op";//setName(smb,S,t.source,t);//setName(smb.name,S.name,t.source.name,t.name);//
+		else
+			OpS.name = "normal_" + fullNameSt(S) + "_" + t.source.name + "_" + t.name + "_op";//setName(smb,S,t.source,t);//setName(smb.name,S.name,t.source.name,t.name);
+		
+		// The operation has an Initial junction and a Final state.
+		var OpS_I 	= new Source!Initial();
+		OpS_I.name	= "i";
+		var OpS_F 	= new Source!Final();
+		OpS_F.name 	= "f";
+		
+		// It has a single transition from OpS_I to OpS_F
+		var OpS_tr = new Source!Transition();
+		OpS_tr.name	  = "t";
+		OpS_tr.source = OpS_I;
+		OpS_tr.target = OpS_F;
+		OpS_tr.action = t.action;
+				
+		//Adding OpS_I and OpS_F to the set of nodes of OpS
+		OpS.nodes.addAll(Set{OpS_I,OpS_F});
+		//Adding OpS_tr to the set of transitions ofOpS
+		OpS.transitions.add(OpS_tr);
+		
+		//Adding a new signature for OpS
+		var OpSig 	= new Source!OperationSig();
+		OpSig.name 	= OpS.name;
+//		
+//        // Declaring an interface that contains OpS		
+		var IOpS = new Source!Interface();
+		IOpS.name = "I_" + OpS.name;
+		IOpS.operations.add(OpSig);
+//		
+//		// Delete the required and defined interfaces of OpS if they are empty.
+//		// otherwise, we make them required by OpS,
+//		// and introduce them in the package
+		if (req_s.variableList.notEmpty() or req_s.operations.notEmpty() or req_s.clocks.notEmpty()){
+		   OpS.rInterfaces.add(req_s);
+		   pkg.interfaces.add(req_s);
+       }
+		else 
+		   delete req_s;
+		
+		if (defEvents_s.events.notEmpty()){
+		   OpS.interfaces.add(defEvents_s);
+		   pkg.interfaces.add(defEvents_s); 
+		}
+		else
+		   delete defEvents_s;
+//		
+//		//Add OperationDef to current package.
+		pkg.operations.add(OpS);
+		// Add interface to current package.
+		pkg.interfaces.add(IOpS);
+		// Make this interface required by smb.
+		smb.rInterfaces.add(IOpS);		
+//
+//		// Introduce a Call to OpS.
+		var OpSCall = new Source!Call();
+		OpSCall.`operation` = OpSig;
+		t.action = OpSCall;
+//			
+		printDebug("Added interfaces to package '" + pkg.name + "' and operation '" + OpS.name + "'");	
+//		////////////////////////////////////////////////////////////////////////////////////////////////-	
+//		// For each ControllerDef in the set of all controllers 'c' in context (Source!ControllerDef)
+//		// for which the 'machines' attribute contains 'smb' or references 'smb', then introduce a
+//		// OperationRef element whose 'ref' attribute points to 'OpS'.
+		for ( c : Source!ControllerDef 
+				in select(c:Source!ControllerDef|c.machines.exists(s|getStateMachine(s)==smb))) 
+		{
+			var opRef 	= new Source!OperationRef();
+			opRef.ref 	= OpS;
+			opRef.name	= c.name + "_ref_" + OpS.name;
+			c.lOperations.add(opRef);
+			printDebug("Adding reference to operation " + opRef.name + "in controller '" + c.name + "'" );	
+		}
+		
+		
+//		
+//
+//		
+		if (debug)
+		{
+			printDebug("End - intro_call_for_act_transition (composite state)");
+			printDebug("******************************************************");
+		}
+	}
+}
+
+
+/*
+pattern intro_call_for_act_transition_ops
+	 pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	smb : Source!OperationDef 
+		from: pkg.operations,
+	t : Source!Transition 
+		from: smb.transitions
+	{
+	// When the action is not an operation call, and the operation is not an action operation
+	match: not (t.action = null) 
+		   and not t.action.isTypeOf(Source!Call) 
+		   //and smb.nodes.size() > 2
+		   //and smb.transitions.size() > 1
+		   and not (smb.name.startsWith("normal_"))
+	do {
+		
+		printDebug("Begin - intro_call_for_act_transition ops" );
+		printDebug("t.name " + t.name);
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		// Create a interfaces to hold new declarations for variables/operations/events used by this t.action.
+		var req_s 	= new Source!Interface();
+		var defEvents_s	= new Source!Interface();
+		
+		req_s.name 	=  setName("req",smb.name,t.source.name,t.name);
+	    defEvents_s.name 	= setName("defEvents",smb.name,t.source.name,t.name);
+		
+		//Capturing the variables used by s
+		var usedVars = usedVars(t.action);	
+		
+		var usedOps = usedOps(t.action);		
+		var usedClocks = usedClocks(t.action);		
+		var reqVarsOps = reqVarsOps(t.action);		
+		var reqClocksOps = reqClocksOps(t.action);		
+		var usedEvents = usedEvents(t.action);		
+		var defEvOps = defEvOps(t.action);
+		
+        if (usedVars.notEmpty()) { req_s.variableList.addAll(usedVars); }
+		if (usedOps.notEmpty()) {req_s.operations.addAll(usedOps); }
+		if (usedClocks.notEmpty()) {req_s.clocks.addAll(usedClocks); }
+		if (reqVarsOps.notEmpty()) { req_s.variableList.addAll(reqVarsOps); }
+		if (reqClocksOps.notEmpty()) {req_s.clocks.addAll(reqClocksOps); }
+		if (usedEvents.notEmpty()){defEvents_s.events.addAll(usedEvents); }
+		if (defEvOps.notEmpty()){defEvents_s.events.addAll(defEvOps); }
+		
+		////////////////////////////////////////////////////////////////////////////////////////////////-		
+		// Create the new operation
+		var OpS 	= new Source!OperationDef();
+		OpS.name 	= setName(smb,t.source,t);//setName("normal",smb.name,t.source.name,t.name,"op");
+		
+		// The operation has an Initial junction and a Final state.
+		var OpS_I 	= new Source!Initial();
+		OpS_I.name	= "i";
+		var OpS_F 	= new Source!Final();
+		OpS_F.name 	= "f";
+		
+		// It has a single transition (OpS_tr) from OpS_I to OpS_F
+		var OpS_tr = new Source!Transition();
+		OpS_tr.name	  = "t";
+		OpS_tr.source = OpS_I;
+		OpS_tr.target = OpS_F;
+		OpS_tr.action = t.action;
+				
+		//Adding OpS_I and OpS_F to the set of nodes of OpS
+		OpS.nodes.addAll(Set{OpS_I,OpS_F});
+		//Adding OpS_tr to the set of transitions ofOpS
+		OpS.transitions.add(OpS_tr);
+		
+		//Dealing with parameters
+		var seqPars = new Sequence(Sorce!Parameter);
+		var seqParsOpSig = new Sequence(Sorce!Parameter);
+		if(usedVarsParametersCl.notEmpty()){
+		  
+		  for (p in smb.parameters){
+		     for (np in usedVarsParametersCl){
+		       if (p.name.equals(np.name)){
+		         var parOpSig = ecoreUtil.copy(np);
+		         seqPars.add(np);
+		         seqParsOpSig.add(parOpSig);
+		         //printDebug("p.name.equals(np.name) " + np + " " + np.name + " " + np.type );
+		       }
+		     }
+		  }
+		
+		   OpS.parameters.addAll(seqPars);
+		   //printDebug("OpS.parameters " + OpS.parameters);
+		}
+		
+		////////////////////////////////////////////////////////////////////////////////////////////////
+		//Creating the new signature for OpS
+		var OpSig 	= new Source!OperationSig();
+		OpSig.name 	= OpS.name;
+		
+		//Adding the parameters for OpSig
+		if(usedVarsParametersCl.notEmpty()){
+		   OpSig.parameters.addAll(seqParsOpSig);
+		}
+		
+		
+		// Declaring an interface that contains OpS		
+		var IOpS = new Source!Interface();
+		IOpS.name = "I_" + OpS.name;
+		IOpS.operations.add(OpSig);
+		
+		// Delete the required and defined interfaces of OpS if they are empty.
+		// otherwise, we make them required by OpS,
+		// and introduce them in the package
+		if (req_s.variableList.notEmpty() or req_s.operations.notEmpty() or req_s.clocks.notEmpty()){
+		   OpS.rInterfaces.add(req_s);
+		   pkg.interfaces.add(req_s);
+       }
+		else 
+		   delete req_s;
+		
+		if (defEvents_s.events.notEmpty()){
+		   OpS.interfaces.add(defEvents_s);
+		   pkg.interfaces.add(defEvents_s); 
+		}
+		else
+		   delete defEvents_s;
+		
+		// Add OperationDef to current package.
+		pkg.operations.add(OpS);
+		// Add interface to current package.
+		pkg.interfaces.add(IOpS);
+		// Make this interface required by smb.
+		smb.rInterfaces.add(IOpS);
+		
+		// Introduce a Call to OpS.
+		var OpSCall = new Source!Call();
+		OpSCall.`operation` = OpSig;
+		t.action = OpSCall;
+		
+		//This call may have arguments, so we need to create a new RefExp for each one of them
+		if (usedVarsParameters.notEmpty()){
+		var seqArgs = new Sequence(Sorce!Expression);
+		   for (p in smb.parameters){
+		     for (np in usedVarsParameters){
+		       if (p.name.equals(np.name)){
+		         var refExp = new Source!RefExp();
+		         refExp.ref = np;
+		         seqArgs.add(refExp);
+		         //printDebug("opsig args " + np + " " + np.name + " " + np.type );
+		         //printDebug("opsig refexp " + refExp  );
+		       }
+		     }
+		     }
+		  t.action.args.addAll(seqArgs);
+		}	    
+			
+		printDebug("Added interfaces to package '" + pkg.name + "' and operation '" + OpS.name + "'");	
+		////////////////////////////////////////////////////////////////////////////////////////////////-	
+		// For each ControllerDef in the set of all controllers 'c' in context (Source!ControllerDef)
+		// for which the 'machines' attribute contains 'smb' or references 'smb', then introduce a
+		// OperationRef element whose 'ref' attribute points to 'OpS'.
+		for ( c : Source!ControllerDef 
+				in select(c:Source!ControllerDef|c.lOperations.exists(s|getOperation(s)==smb))) 
+		{
+			var opRef 	= new Source!OperationRef();
+			opRef.ref 	= OpS;
+			opRef.name	= c.name + "_ref_" + OpS.name;
+			c.lOperations.add(opRef);
+			printDebug("Adding reference to operation in controller '" + c.name + "'");
+		}
+		////////////////////////////////////////////////////////////////////////////////////////////////-
+
+		if (debug)
+		{
+			printDebug("End - intro_call_for_act_transition_ops");
+
+		}
+	}
+}
+*/
+
+
+//operation setName(st:String, st2:String, st3:String,st4:String){
+//  return st + "_" + st2 + "_" + st3 + "_" + st4;
+//}
+//
+//operation setName(st:String, st2:String, st3:String,st4:String,st5:String){
+//  return st + "_" + st2 + "_" + st3 + "_" + st4 + "_" + st5;
+//}
+
+

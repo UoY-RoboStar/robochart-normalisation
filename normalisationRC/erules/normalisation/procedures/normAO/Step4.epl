@@ -1,0 +1,166 @@
+
+ 
+
+// Initialization of variables, for example, before transformation.
+pre {
+	// Controls whether debug information is printed.
+	var debug = true;
+	var emfTool = new Native("org.eclipse.epsilon.emc.emf.tools.EmfTool");
+	var ecoreUtil = emfTool.ecoreUtil;
+}
+
+// We can define operations.
+operation printDebug(string) {
+	if (debug) {(": "+string).println();}
+}
+
+
+// Rule to introduce wait operations (waitOp and waitInterval) into all controllers of the model
+pattern IntroduceWaitOperations
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(mainPkgRCT){//clonepackagename) {
+ 
+	do {
+		
+		// creating operation waitInterval
+		var waitInterval 	= new Source!OperationDef();
+		waitInterval.name 	= "waitInterval";
+		
+		// parameters for the waitInterval operation
+		var parM = new Source!Parameter();
+		var parMtype = new Source!TypeRef();
+		parMtype.ref = Source!PrimitiveType.all.selectOne(p|p.name="nat");
+		parM.type = parMtype;
+		parM.name = "m";
+		
+		var parN = new Source!Parameter();
+		var parNtype = new Source!TypeRef();
+		//In general, the parameter can be an expression. Hence, 
+		//real can be used for all possible cases
+		parNtype.ref = Source!PrimitiveType.all.selectOne(p|p.name="nat");
+		parN.type = parNtype;
+		parN.name = "n";
+		waitInterval.parameters.addAll(Sequence{parM,parN});
+		
+		//creating a Clock
+		var clock = new Source!Clock();
+		clock.name = "C";
+		waitInterval.clocks.add(clock);
+		//creating a ClockReset
+		var clockReset = new Source!ClockReset();
+		clockReset.clock = clock;
+		
+		// node container of the waitInterval operation
+		//creating the nodes  
+		var waitInterval_I = new Source!Initial();
+		waitInterval_I.name = "i";
+		var waitInterval_J = new Source!Junction();
+		waitInterval_J.name = "j";
+		var waitInterval_F = new Source!Final();
+		waitInterval_F.name = "f";
+		//creating the transition
+		var waitInterval_TrI = new Source!Transition();
+		waitInterval_TrI.name = "trI";
+		waitInterval_TrI.source = waitInterval_I;
+		waitInterval_TrI.target = waitInterval_J;
+		waitInterval_TrI.action = clockReset;
+		
+		//n
+		var rfN = new Source!RefExp();
+		rfN.ref = parN;
+		//m
+		var rfM = new Source!RefExp();
+		rfM.ref = parM;
+		
+		//create since(C)>=m
+		var clockGT = new Source!GreaterOrEqual();
+		var clockRef1 = new Source!ClockExp();
+		clockRef1.clock = clock;
+		clockGT.left = clockRef1;
+		clockGT.right = rfM;
+		//create the final transition
+		var waitInterval_TrF = new Source!Transition();
+		waitInterval_TrF.name = "trF";
+		waitInterval_TrF.source = waitInterval_J;
+		waitInterval_TrF.target = waitInterval_F;
+		waitInterval_TrF.condition = clockGT;
+		
+		//create since(C)<n
+		var clockLS = new Source!LessThan();
+		var clockRef2 = new Source!ClockExp();
+		clockRef2.clock = clock;
+		clockLS.left = clockRef2;
+		clockLS.right = rfN;
+		
+		// The waitInterval must require the interface IwaitOp
+		var IwaitOp = pkg.interfaces.selectOne(i|i.name.equals("IwaitOp"));
+		var waitOpSig = IwaitOp.operations.selectOne(op | op.isTypeOf(Source!OperationSig)
+		                                             and op.name.equals("waitOp"));
+		
+		// call statement is a call to the op waitOp
+		var callST = new Source!Call();
+		callST.`operation` = waitOpSig;
+		//create the args
+		var integer1 = new Source!IntegerExp();
+		integer1.value = 1; 
+		callST.args.add(integer1);
+		
+		//create a self-transition
+		var waitInterval_TrSelf = new Source!Transition();
+		waitInterval_TrSelf.name = "trSelf";
+		waitInterval_TrSelf.source = waitInterval_J;
+		waitInterval_TrSelf.target = waitInterval_J;
+		waitInterval_TrSelf.condition = clockLS;
+		waitInterval_TrSelf.action = callST;
+
+		// adding nodes and transition to waitInterval
+		waitInterval.nodes.addAll(Set{waitInterval_I,waitInterval_F,waitInterval_J});
+		waitInterval.transitions.addAll(Set{waitInterval_TrI,waitInterval_TrSelf,waitInterval_TrF});
+		
+		//creating the Signature for waitInterval
+		var waitIntervalSig 	= new Source!OperationSig();
+		waitIntervalSig.name 	= waitInterval.name;
+		
+		//creating the parameters for waitIntervalSig 
+		var parDSig_m = new Source!Parameter();
+		parDSig_m.name = "m";
+		var parDSig_m_type = new Source!TypeRef();
+		parDSig_m_type.ref = Source!PrimitiveType.all.selectOne(p|p.name="nat");
+		parDSig_m.type = parDSig_m_type;
+		
+		var parDSig_n = new Source!Parameter();
+		parDSig_n.name = "n";
+		var parDSig_n_type = new Source!TypeRef();
+		parDSig_n_type.ref = Source!PrimitiveType.all.selectOne(p|p.name="nat");
+		parDSig_n.type = parDSig_n_type;
+		//Adding the parameters
+		waitIntervalSig.parameters.addAll(Sequence{parDSig_m,parDSig_n});
+		
+		// creating interfaces for the defined operations
+		var IwaitInterval = new Source!Interface();
+		IwaitInterval.name = "I" + waitInterval.name;
+		IwaitInterval.operations.add(waitIntervalSig);
+		
+		// The waitInterval must require the interface IwaitOp
+		waitInterval.rInterfaces.add(IwaitOp);
+		
+		//Adding the Operation and the interface to current package.
+		pkg.operations.add(waitInterval); 
+		pkg.interfaces.add(IwaitInterval);
+		 
+		////////////////////////////////////////////////////////////////////////////////////////////////-	
+		// For each ControllerDef (see from clause in the pattern) in the set of all controllers  
+		// introduce references to the created operations 
+		 for (ctrl in Source!ControllerDef.all) {
+
+			var waitIntervalRef 	= new Source!OperationRef();
+			waitIntervalRef.ref 	= waitInterval;
+			waitIntervalRef.name	= ctrl.name + "_ref_" + waitInterval.name;
+			ctrl.lOperations.add(waitIntervalRef); 
+			//printDebug("Adding references to operations in controller '" + ctrl.name + "'");
+		 }				
+			//printDebug("EXIT Introduce wait Operations");
+	}
+}
+
+ 

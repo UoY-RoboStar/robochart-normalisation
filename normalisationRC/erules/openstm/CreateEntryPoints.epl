@@ -1,0 +1,395 @@
+
+// Initialization of variables, for example, before transformation.
+pre {
+	// Controls whether debug information is printed.
+	var debug = true;
+	
+	printDebug("In CreateEntryPoints.epl, with modelrepository: " + System.context.getModelRepository());
+	
+	for (m in System.context.getModelRepository().models) {
+		printDebug("m: " + m.name);
+	}
+	
+	for (p in OpenSTM!RCBasicOpenStateMachine.all) {
+			printDebug("Create entry points: " + p + p.nodes + p.transitions + " in resource " + p.eResource().getURI().toString());
+	}
+	
+	for (nc in OpenSTM!NodeContainer.all) {
+		//printDebug("NodeContainer: " + nc + " nodes: " + nc.nodes + " trans: " + nc.transitions);
+		for (n in nc.nodes) {
+			//printDebug("node: " + n);
+		}
+		for (ts in nc.transitions) {
+			//printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ")");
+		}
+	}
+	
+	("Context: " + System.context).println();
+}
+
+// We can define operations.
+operation printDebug(string) {
+	if (debug) {(": "+string).println();}
+}
+
+ 
+pattern State2EState
+	nc : OpenSTM!NodeContainer,
+	s : OpenSTM!State
+	from: nc.nodes
+	//match: nc.nodes.exists(x | x = s) and s.isTypeOf(OpenSTM!State)
+	guard: s.isTypeOf(OpenSTM!State)
+	       and s.nodes.count(n|not n.isKindOf(OpenSTM!EntryPoint)) == 0 {  
+	//and s.nodes.size() == 0
+	do {
+		printDebug("State2EState - State " + s + " NodeContainer " + nc);
+		//("Context: " + System.context.getFrameStack()).println();
+		
+		// Create new EState and copy everything.
+		var es = new OpenSTM!EState();
+		es.name = s.name;
+		es.nodes = s.nodes.clone();
+		es.transitions = s.transitions.clone();
+		es.actions = s.actions.clone();
+		es.entrypoint = false;
+		//Adding the parameters for translating during actions
+		if (s.~Iinact_L <> null){
+			es.~Iinact_L = s.~Iinact_L;
+		}
+		if (s.~Iinact <> null){
+			es.~Iinact = s.~Iinact;
+		}
+		
+		if (s.~innermoststate <> null){
+			es.~innermoststate = s.~innermoststate;
+		}
+		if (s.~IopFinalDuring <> null){
+			es.~IopFinalDuring = s.~IopFinalDuring;	
+		}
+		
+		if (s.~SEndStateStm<>null){
+			//printDebug(" s.~SEndStateStm<>null " + s.~SEndStateStm);
+			es.~SEndStateStm = s.~SEndStateStm;
+		}
+		
+		if (s.~SEndStateSt <> null){
+			es.~SEndStateSt = s.~SEndStateSt;
+		}
+		
+		if (s.~setGuards <> null){
+			es.~setGuards = s.~setGuards;
+		}
+		
+		if (s.~IctrEvars <> null){
+			es.~IctrEvars = s.~IctrEvars;
+		}
+		
+		if (s.~trSEnd <> null){
+			printDebug(" Create Entry point s.~trSEnd <> null " + s.~trSEnd);
+			es.~trSEnd = s.~trSEnd;
+			if (s.~trSEnd.target = s){
+				s.~trSEnd.target = es;
+			}
+			if (s.~trSEnd.source = s){
+				s.~trSEnd.source= es;
+			}
+		}
+		
+    	if (s.~trSEndNotInvolvingDurActions <> null){
+    		es.~trSEndNotInvolvingDurActions = s.~trSEndNotInvolvingDurActions;
+    	}
+    	
+    	if (s.~trSEndInParFlow <> null){
+    		es.~trSEndInParFlow = s.~trSEndInParFlow;
+    	}
+		
+		if (s.~SEnd <> null){
+			es.~SEnd = s.~SEnd;
+		}
+		
+		// Update all transitions that refer to this state.
+		for (t : Transition in nc.transitions.select(t|t.target = s)) {
+			t.target = es;
+		}
+		for (t : Transition in nc.transitions.select(t|t.source = s)) {
+			t.source = es;
+		}
+		 
+		if (s.~setSEndTrs <> null){
+		    es.~setSEndTrs = s.~setSEndTrs;
+			printDebug(" if (s.~setSEndTrs <> null) " + s.~setSEndTrs);
+			for (t : Transition in s.~setSEndTrs.select(t|t.target = s)){
+				t.target = es;	
+			}
+			for (t : Transition in s.~setSEndTrs.select(t|t.source = s)) {
+				t.source = es;
+			}
+		}
+		
+		if (s.~SFinal_opSig <> null){
+			es.~SFinal_opSig = s.~SFinal_opSig;
+		}
+		
+		// Add new EState to the NodeContainer nc.
+		nc.nodes.add(es);
+		// Remove old state from NodeContainer nc and delete it.
+		nc.nodes.remove(s);
+		delete s;
+		
+		if (debug)
+		{
+			for (n in es.nodes) {
+				printDebug("Node: " + n);
+				printDebug("name: " + n.name);
+//				if (n.name.startsWith("WaitForNextIteration")){
+//				   printDebug("The name of the state is WaitForNextIteration " + n.nodes.size());
+//				}
+			}
+//		
+			for (ts in es.transitions) {
+				printDebug("Transition '" + ts.name + "' from '" + ts.source +  "' to '" + ts.target + "' (action: " + ts.action + ")");
+			}
+		}
+	
+		//printDebug(">>>> GLOBAL SCOPE:");	
+//		for (nz in OpenSTM!NodeContainer.all) {
+//			printDebug("NodeContainer: " + nz + " nodes: " + nz.nodes + " trans: " + nz.transitions);
+//			for (n in nz.nodes) {
+//				printDebug("node: " + n);
+//			}
+//			for (ts in nz.transitions) {
+//				printDebug("Transition '" + ts.name + "' from '" + ts.source +  "' to '" + ts.target + "' (action: " + ts.action + ")");
+//			}
+//		}
+		//printDebug("<<<< GLOBAL SCOPE:");
+	}
+}
+
+//pattern CompositeState2EState
+//	nc : OpenSTM!NodeContainer,
+//	s : OpenSTM!State
+//	from: nc.nodes   //{
+//	//match: nc.nodes.exists(x | x = s) and s.isTypeOf(OpenSTM!State)
+//	guard: s.isTypeOf(OpenSTM!State) and s.nodes.size() > 0
+//	{
+//	do {
+//		printDebug("CompositeState2EState - State " + s + " NodeContainer " + nc);
+//		//("Context: " + System.context.getFrameStack()).println();
+//		
+//		// Create new EState and copy everything.
+//		var es = new OpenSTM!EState();
+//		es.name = s.name;
+//		es.nodes = s.nodes.clone();
+//		es.transitions = s.transitions.clone();
+//		es.actions = s.actions.clone();
+//		es.entrypoint = false;
+//		
+//		// Update all transitions that refer to this state.
+//		for (t : Transition in nc.transitions.select(t|t.target = s)) {
+//			t.target = es;
+//		}
+//		for (t : Transition in nc.transitions.select(t|t.source = s)) {
+//			t.source = es;
+//		}
+//		
+//		// Add new EState to the NodeContainer nc.
+//		nc.nodes.add(es);
+//		// Remove old state from NodeContainer nc and delete it.
+//		nc.nodes.remove(s);
+//		delete s;
+//		
+//		if (debug)
+//		{
+////			for (n in nc.nodes) {
+////				printDebug("Node: " + n);
+////			}
+////		
+////			for (ts in nc.transitions) {
+////				printDebug("Transition '" + ts.name + "' from '" + ts.source +  "' to '" + ts.target + "' (action: " + ts.action + ")");
+////			}
+//		}
+//	
+//		//printDebug(">>>> GLOBAL SCOPE:");	
+//		for (nz in OpenSTM!NodeContainer.all) {
+////			printDebug("NodeContainer: " + nz + " nodes: " + nz.nodes + " trans: " + nz.transitions);
+////			for (n in nz.nodes) {
+////				printDebug("node: " + n);
+////			}
+////			for (ts in nz.transitions) {
+////				printDebug("Transition '" + ts.name + "' from '" + ts.source +  "' to '" + ts.target + "' (action: " + ts.action + ")");
+////			}
+//		}
+//		//printDebug("<<<< GLOBAL SCOPE:");
+//	}
+//}
+
+
+// Note: Although this rule appears later than State2EState, and thus
+//		 would only be applied if State2EState was not applicable,
+//		 we still enforce that the type is specific in the matching condition
+//		 to avoid any potential problems. 
+//
+// 		 Similar comment applies to other rules that follow.
+
+pattern Final2EFinal
+	nc : OpenSTM!NodeContainer,
+	s : OpenSTM!Final 
+		from: nc.nodes
+		guard: s.isTypeOf(OpenSTM!Final) {
+	//match: nc.nodes.exists(x | x = s) and s.isTypeOf(OpenSTM!Final)
+	do {
+		//printDebug("Final2EFinal");
+		
+		// Create new EFinal and copy everything.
+		var es = new OpenSTM!EFinal();
+		es.name = s.name;
+		es.nodes = s.nodes.clone();
+		es.transitions = s.transitions.clone();
+		es.actions = s.actions.clone();
+		es.entrypoint = false;
+		
+		// Update all transitions that refer to this node.
+		for (t : Transition in nc.transitions.select(t|t.target = s)) {
+			t.target = es;
+		}
+		for (t : Transition in nc.transitions.select(t|t.source = s)) {
+			t.source = es;
+		}
+		
+		// Add new EFinal to the NodeContainer nc.
+		nc.nodes.add(es);
+		// Remove old state from NodeContainer nc and delete it.
+		nc.nodes.remove(s);
+		delete s;
+		
+		/*
+		if (debug)
+		{
+			for (ts in nc.transitions) {
+				//printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ")");
+			}
+		}
+       */
+	}
+}
+
+pattern Initial2EInitial
+	nc : OpenSTM!NodeContainer,
+	s : OpenSTM!Initial 
+		from: nc.nodes 
+		guard: s.isTypeOf(OpenSTM!Initial) {
+	//match: s.isTypeOf(OpenSTM!Initial) //nc.nodes.exists(x | x = s)
+	do {
+		//printDebug("Initial2EInitial");
+		
+		// Create new EInitial and copy everything.
+		var es = new OpenSTM!EInitial();
+		es.name = s.name;
+		es.entrypoint = true; // By default an initial state is an entrypoint.
+		
+		// Update all transitions that refer to this node.
+		for (t : Transition in nc.transitions.select(t|t.target = s)) {
+			t.target = es;
+		}
+		for (t : Transition in nc.transitions.select(t|t.source = s)) {
+			t.source = es;
+		}
+		
+		// Add new EInitial to the NodeContainer nc.
+		nc.nodes.add(es);
+		// Remove old state from NodeContainer nc and delete it.
+		nc.nodes.remove(s);
+		delete s;
+		
+		
+		if (debug)
+		{
+			for (ts in nc.transitions) {
+				printDebug("Initial2EInitial Transition '" + ts.name + "' from '" + ts.source +  "' to '" + ts.target + "' (action: " + ts.action + ")");
+			}
+		}
+        
+	}
+}
+
+pattern Initial2EJunction
+	nc : OpenSTM!NodeContainer,
+	s : OpenSTM!Junction 
+		from: nc.nodes
+		guard: s.isTypeOf(OpenSTM!Junction) {
+	//match: nc.nodes.exists(x | x = s) and s.isTypeOf(OpenSTM!Junction)
+	do {
+		//printDebug("Initial2EInitial");
+		
+		// Create new EJunction and copy everything.
+		var es = new OpenSTM!EJunction();
+		es.name = s.name;
+		es.entrypoint = false;
+		
+		// Update all transitions that refer to this node.
+		for (t : Transition in nc.transitions.select(t|t.target = s)) {
+			t.target = es;
+		}
+		for (t : Transition in nc.transitions.select(t|t.source = s)) {
+			t.source = es;
+		}
+		
+		// Add new EJunction to the NodeContainer nc.
+		nc.nodes.add(es);
+		// Remove old state from NodeContainer nc and delete it.
+		nc.nodes.remove(s);
+		delete s;
+		
+		/*
+		if (debug)
+		{
+			for (ts in nc.transitions) {
+				printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ")");
+			}
+		}
+         */
+	}
+}
+/*
+pattern RCBasicOpenStateMachine2EState
+	nc : OpenSTM!RCBasicOpenStateMachine,
+	s : OpenSTM!State  {
+	match: nc.nodes.exists(x | x = s) and s.isTypeOf(OpenSTM!State)
+	do {
+		printDebug("State2EState ");
+		("Context: " + System.context.getFrameStack()).println();
+		
+		// Create new EState and copy everything.
+		var es = new OpenSTM!EState();
+		es.name = s.name;
+		es.nodes = s.nodes.clone();
+		es.transitions = s.transitions.clone();
+		es.actions = s.actions.clone();
+		es.entrypoint = false;
+		
+		// Update all transitions that refer to this state.
+		for (t : Transition in nc.transitions.select(t|t.target = s)) {
+			t.target = es;
+		}
+		for (t : Transition in nc.transitions.select(t|t.source = s)) {
+			t.source = es;
+		}
+		
+		// Add new EState to the NodeContainer nc.
+		nc.nodes.add(es);
+		// Remove old state from NodeContainer nc and delete it.
+		nc.nodes.remove(s);
+		delete s;
+		
+		if (debug)
+		{
+			for (n in nc.nodes) {
+				printDebug("Node: " + n);
+			}
+		
+			for (ts in nc.transitions) {
+				printDebug("Transition '" + ts.name + "' from '" + ts.source +  "' to '" + ts.target + "' (action: " + ts.action + ")");
+			}
+		}
+	}
+}*/

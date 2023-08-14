@@ -1,0 +1,59 @@
+
+import "../packages/Packages.eol";
+
+// Initialization of variables, for example, before transformation.
+pre {	
+	var debug = true;
+	
+	for (p in Source!RCPackage.all) {
+		printDebug("Package in context: " + p.name);
+	}
+}
+
+// The following rule attempts to extract the node container from a StateMachineDef and
+// creates an BasicOpenStateMachine from it.
+pattern extractOpenStateMachine
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	s : Source!StateMachineDef
+		from: pkg.machines { 
+	match: s.nodes.size() > 0 and s.~visited = null
+	       //and s.transitions.size() > 1 (FROM I TO F)
+	do {
+		printDebug("Extracting OpenStateMachine: " + fullName(s));
+		var openSTM = new OpenSTM!RCBasicOpenStateMachine();
+		printDebug("New BasicOpenStateMachine");
+		
+		if (debug) {
+			for (ts in s.transitions) {
+				printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ")");
+			}
+		}
+		
+		openSTM.transitions = s.transitions.clone();
+		printDebug("Changing transitions/states");
+		openSTM.nodes = s.nodes.clone();
+		
+		if (debug) {
+			for (ts in openSTM.transitions) {
+				printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ")");
+			}
+		}
+		s.~visited = true;
+	}
+}
+
+pattern listOpenStateMachine
+	s : OpenSTM!RCBasicOpenStateMachine {
+	match: s.~visited = null
+	do {
+		printDebug("BasicOpenStateMachine");
+		if (debug)
+		{
+			for (ts in s.transitions) {
+				printDebug("Transition '" + ts.name + "' from '" + ts.source.name +  "' to '" + ts.target.name + "' (action: " + ts.action + ")");
+			}
+		}
+		s.~visited = true;
+	}
+}

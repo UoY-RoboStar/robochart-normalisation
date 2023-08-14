@@ -1,0 +1,51 @@
+// Initialization of variables, for example, before transformation.
+pre {
+	// Controls whether debug information is printed.
+	var debug = true;
+	var emfTool = new Native("org.eclipse.epsilon.emc.emf.tools.EmfTool");
+	var ecoreUtil = emfTool.ecoreUtil;
+	
+}
+
+// We can define operations.
+operation printDebug(string) {
+	if (debug) {(": "+string).println();}
+}
+
+
+pattern split_sequence
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	smb: Source!StateMachineBody from: pkg.machines     
+		
+	{
+	 match: smb.name.equals(smbP)
+	do { 
+	    //printDebug("smbP " + smbP);
+		//var smb = pkg.machines.selectOne(m|m.name.equals(smbP));
+		//Getting the source node
+		var src = smb.nodes.selectOne(s|s.name.equals(srcP));
+		//printDebug(" src " + src);
+		//Getting the transition from the source node
+		var tr1 = smb.transitions.selectOne(t|t.source=src);
+		//printDebug("tr1 " + tr1);
+    	//Getting the junction that is the target of tr1
+		var junction = smb.nodes.selectOne(j|j=tr1.target);
+		//printDebug("junction " + junction);
+		//Getting the transition whose source is junction
+		var tr2 = smb.transitions.selectOne(t|t.source=junction);
+    	//printDebug("tr2 " + tr2);
+    
+    	//Updating the action of the first transition (s1;s2)
+    	//First, we create a SeqStatement
+    	var seq = new Source!SeqStatement();
+    	seq.statements.addAll(Sequence{tr1.action,tr2.action}); 
+    	tr1.action = seq;
+    	tr1.target = tr2.target;
+    
+    	//Removing the junction junction and the transition out of it
+    	smb.nodes.remove(junction);
+    	smb.transitions.remove(tr2);
+    	
+	}
+}
