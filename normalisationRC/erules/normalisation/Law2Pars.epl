@@ -1,0 +1,47 @@
+import "../common/RoboChart.eol";  
+import "../common/Common.eol";
+// Initialization of variables, for example, before transformation.
+pre {
+	// Controls whether debug information is printed.
+	var debug = true;
+	var emfTool = new Native("org.eclipse.epsilon.emc.emf.tools.EmfTool");
+	var ecoreUtil = emfTool.ecoreUtil;
+	
+	
+}
+
+pattern intro_call_for_act_transition
+	 pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	 smb : Source!StateMachineBody 
+    	from: smbs(pkg),
+    st 	: Source!State	
+		// One of the states of smb
+		from: nodesSmb(smb),
+     t : Source!Transition
+    	from: st.transitions 
+	{
+	// When the action is not an operation call
+	match: not (t.action == null) 
+		   and not (t.action.isTypeOf(Source!Call))
+		   and (smb.name.equals(smbP))
+		   and (st.name.equals(stP)) 
+		   and (t.name.equals(trP))
+	do {
+		
+		printDebug("Law 2 with parameters" );
+		
+		var interface = pkg.interfaces.selectOne(i|i.name.equals(interfaceP));
+	    var OpSig = interface.operations.selectOne(op|op.name.equals(opP));
+		// Introduce a Call to OpS.
+		var OpSCall = new Source!Call();
+		OpSCall.`operation` = OpSig;
+		t.action = OpSCall;
+		
+
+	}
+}
+
+
+
+
