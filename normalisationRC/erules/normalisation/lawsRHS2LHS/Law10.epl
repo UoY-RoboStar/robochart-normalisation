@@ -1,0 +1,37 @@
+// Initialization of variables, for example, before transformation.
+pre {
+	// Controls whether debug information is printed.
+	var debug = true;
+	var emfTool = new Native("org.eclipse.epsilon.emc.emf.tools.EmfTool");
+	var ecoreUtil = emfTool.ecoreUtil;
+	
+}
+
+
+pattern intro_junction_from_initial_junction
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	smb: Source!StateMachineBody from: pkg.machines     
+		
+	{
+	 match: smb.transitions.exists(t|t.source.isKindOf(Source!Initial) and t.target.isKindOf(Source!Junction))
+	do { 
+		//Getting the initial node
+		var tr1 = smb.transitions.selectOne(t|t.source.isKindOf(Source!Initial) and t.target.isKindOf(Source!Junction));
+		//Getting the initial state
+		var initial = tr1.source;
+		//Getting the junction from tr1
+		var junction = tr1.target;
+		//Getting the transision whose source is the previous junction
+		var tr2 = smb.transitions.selectOne(t|t.source=junction);
+		//Updation tr1
+		tr1.target = tr2.target;
+		tr1.action = tr2.action; 
+		
+		//Removing tr2
+		smb.transitions.remove(tr2);
+		//Removing the junction
+		smb.nodes.remove(junction);
+    
+	}
+}
