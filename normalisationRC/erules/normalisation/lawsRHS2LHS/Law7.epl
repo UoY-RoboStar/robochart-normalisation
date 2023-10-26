@@ -1,0 +1,31 @@
+// Initialization of variables, for example, before transformation.
+pre {
+	// Controls whether debug information is printed.
+	var debug = true;
+	var emfTool = new Native("org.eclipse.epsilon.emc.emf.tools.EmfTool");
+	var ecoreUtil = emfTool.ecoreUtil;
+	
+}
+
+
+pattern elim_parentheses
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	smb: Source!StateMachineBody from: pkg.machines     
+		
+	{
+	 match: smb.name.equals(smbP)
+	do { 
+		//Getting the source node
+		var src = smb.nodes.selectOne(s|s.name.equals(srcP));
+		//Getting the transition from the source node
+		var tr1 = smb.transitions.selectOne(t|t.source=src);
+    	
+    	
+    	//Getting the action of the transition tr1
+    	var parStmt = tr1.action;
+    	//Eliminating the parentheses
+    	tr1.action = parStmt.stmt;
+    
+	}
+}
