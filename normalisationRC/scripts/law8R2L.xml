@@ -1,8 +1,8 @@
 <!-- This file contains the complete sequence of steps for transformations
 	 for a specific project. -->
 <project default="RunDefault">
-
-	<property name="erules" value="platform:/resource/circus.robocalc.robochart2sim.erules/erules"/>
+<!-- circus.robocalc.robochart2sim.erules-->
+	<property name="erules" value="platform:/resource/normalisationRC/erules"/>
 	<property name="maxloops" value="20"/>
 
 	<macrodef name="transform">
@@ -46,7 +46,7 @@
 	<target name="Translate">
 
 		<!-- The OutputFolder property is then set as follows. -->
-		<property name="OutputFolder" value="${Project}out1008/${build.number}/"/>
+		<property name="OutputFolder" value="${Project}out2610/${build.number}/"/>
 		<property name="OutputPackage" value="pkg${build.number}"/>
 		<property name="OutputRCT" value="${OutputFolder}${InputRCT}"/>
 		<property name="mainPkgRCT" value="${OutputPackage}_${RoboChartMainPackage}"/>
@@ -171,7 +171,7 @@
 			================================================================================================== -->
 				
 		
-			<epsilon.epl uri="${erules}/normalization/procedures/lawsRHS2LHS/Law8.epl" repeatwhilematches="false">
+			<epsilon.epl uri="${erules}/normalisation/lawsRHS2LHS/Law8.epl" repeatwhilematches="false">
 					<model ref="Clone" as="Source"/>
 					<parameter name="clonepackagename" value="${OutputPackage}"/>
 				   <parameter name="smbP" value="${smbP}"/>
@@ -233,7 +233,7 @@
 				 The parameters are similar to those passed to CloneModule.etl.
 				 
 				 NOTE: In the ETL program the source model is called Source, so here we map
-				 Clone to the name Source by using the ref/as attributes. -->
+				 Clone to the name Source by using the ref/as attributes. 
 			<epsilon.etl uri="${erules}/robosim/RC2RS.etl" setbeans="true">
 				<parameter name="projecturi" value="${Project}"/>
 				<parameter name="buildnumber" value="${build.number}"/>
@@ -242,14 +242,14 @@
 				<parameter name="outputfolder" value="${OutputFolder}robosim/"/>
 				<model ref="Clone" as="Source"/>
 				<model ref="Target"/>
-			</epsilon.etl>		
+			</epsilon.etl>		-->
 			
 			<!-- After the transformation completes, we call SaveAll.eol to save the new
-				 resources to disk. -->	
+				 resources to disk. 	
 			<epsilon.eol uri="${erules}/common/SaveAll.eol"> 
 				<parameter name="outputfolder" value="${OutputFolder}robosim/"/>
 				<model ref="Target"/>
-			</epsilon.eol>		
+			</epsilon.eol>		-->
 
 			<epsilon.disposeModels />
 			<echo level="info">Disposed and finished..</echo>
