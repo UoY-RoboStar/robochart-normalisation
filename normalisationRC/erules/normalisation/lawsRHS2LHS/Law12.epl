@@ -1,0 +1,34 @@
+import "../../common/RoboChart.eol";  
+import "../../common/Common.eol";
+// Initialization of variables, for example, before transformation.
+pre {
+	// Controls whether debug information is printed.
+	var debug = true;
+	var emfTool = new Native("org.eclipse.epsilon.emc.emf.tools.EmfTool");
+	var ecoreUtil = emfTool.ecoreUtil;
+	
+}
+
+
+pattern intro_waitOp
+	pkg : Source!RCPackage
+		guard: pkg.name.asString().startsWith(clonepackagename),
+	smb: Source!StateMachineBody from: pkg.machines,
+	t:Source!Transition from: smb.transitions    
+		
+	{
+	 match: not (t.action = null) 
+	        and t.action.isTypeOf(Source!Call) 
+	        and t.action.`operation`.name.startsWith("waitOp")
+	
+	do { 
+		//Creating a wait statement
+		var wait = new Source!Wait();
+		printDebug("t.action.args " + t.action.args);
+		wait.duration = t.action.args.get(0);
+		//Updating the action
+		t.action = wait; 
+	
+    
+	}
+}
