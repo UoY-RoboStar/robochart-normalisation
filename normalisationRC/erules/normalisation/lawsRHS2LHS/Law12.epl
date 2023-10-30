@@ -10,7 +10,7 @@ pre {
 }
 
 
-pattern intro_waitOp
+pattern elim_wait_RHS2LRS
 	pkg : Source!RCPackage
 		guard: pkg.name.asString().startsWith(clonepackagename),
 	smb: Source!StateMachineBody from: pkg.machines,
